@@ -1,0 +1,7 @@
+{
+  "name": "SkyWatch UA MVP",
+  "description": "A visualization tool for air threat directions over Ukraine based on simulated public data with built-in region randomization and test modes.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
