@@ -5,13 +5,11 @@ import MapDisplay from './components/MapDisplay';
 import Controls from './components/Controls';
 import TelegramFeed from './components/TelegramFeed';
 import { mockBackend } from './services/mockBackend';
-import { ShieldCheck, Activity, Target, Zap, Clock, TrendingUp, Info, X, RefreshCw, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, Activity, Target, Zap, Clock, TrendingUp, Info, X, ChevronRight } from 'lucide-react';
 
 const App: React.FC = () => {
   const [events, setEvents] = useState<AirEvent[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [scraperInfo, setScraperInfo] = useState<any>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<AirEvent | null>(null);
   const [filters, setFilters] = useState<FilterState>({
     types: [TargetType.SHAHED, TargetType.MISSILE, TargetType.KAB],
@@ -20,14 +18,14 @@ const App: React.FC = () => {
 
   const refreshData = useCallback(async () => {
     try {
+      // Используем относительный путь для универсальности
       const res = await fetch('/api/events');
       if (res.ok) {
-        const data = await res.json();
-        mockBackend.syncServerEvents(data.events || []);
-        setScraperInfo(data.scraper);
+        const serverEvents = await res.json();
+        mockBackend.syncServerEvents(serverEvents);
       }
     } catch (err) {
-      console.warn("Backend connection issues");
+      console.warn("Backend not reachable, using local store");
     }
     
     const rawEvents = mockBackend.getEvents();
@@ -40,16 +38,6 @@ const App: React.FC = () => {
     setEvents(filtered);
     setLogs(mockBackend.getLogs());
   }, [filters]);
-
-  const forceScrape = async () => {
-    setIsSyncing(true);
-    try {
-      await fetch('/api/force-scrape', { method: 'POST' });
-      await refreshData();
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   useEffect(() => {
     refreshData();
@@ -70,8 +58,8 @@ const App: React.FC = () => {
         <MapDisplay events={events} onSelectEvent={setSelectedEvent} />
       </div>
 
-      {/* HEADER LOGO & SCRAPER STATUS */}
-      <div className="absolute top-6 left-6 z-[1002] flex flex-col gap-2 pointer-events-none">
+      {/* HEADER LOGO */}
+      <div className="absolute top-6 left-6 z-[1002] flex items-center gap-4 pointer-events-none">
         <div className="glass-panel p-3 rounded-xl border-l-4 border-l-rose-600 pointer-events-auto flex items-center gap-3">
           <div className="p-2 bg-rose-600/20 rounded-lg">
             <ShieldCheck size={20} className="text-rose-500" />
@@ -79,31 +67,11 @@ const App: React.FC = () => {
           <div>
             <h1 className="text-lg font-black tracking-tighter uppercase leading-none">SkyWatch</h1>
             <div className="flex items-center gap-1.5 mt-1">
-              <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${scraperInfo?.status === 'rate-limited' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-              <span className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">
-                {scraperInfo?.status === 'rate-limited' ? 'TG Rate Limited' : 'Tactical Node Online'}
-              </span>
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">Tactical Node Online</span>
             </div>
           </div>
         </div>
-
-        {scraperInfo && (
-          <div className="glass-panel px-3 py-1.5 rounded-lg pointer-events-auto flex items-center gap-3 border-white/5">
-             <div className="flex flex-col">
-               <span className="text-[7px] text-slate-500 font-bold uppercase">Last Intel Sync</span>
-               <span className="text-[9px] text-slate-300 font-mono">
-                 {scraperInfo.lastRun ? new Date(scraperInfo.lastRun).toLocaleTimeString() : 'Never'}
-               </span>
-             </div>
-             <button 
-               onClick={forceScrape} 
-               disabled={isSyncing}
-               className="p-1.5 bg-white/5 hover:bg-white/10 rounded-md transition-colors text-sky-400 disabled:opacity-50"
-             >
-               <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} />
-             </button>
-          </div>
-        )}
       </div>
 
       {/* ANALYTICS WIDGET */}
@@ -143,7 +111,7 @@ const App: React.FC = () => {
             {logs.length > 0 ? logs.slice(0, 15).map(log => (
               <div key={log.id} className="text-[9px] leading-snug border-l-2 border-slate-800 pl-2 py-0.5">
                 <span className="text-slate-500 font-bold mr-1">[{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}]</span>
-                <span className="text-slate-300 italic">(@{log.source})</span> <span className="text-slate-300">{log.text}</span>
+                <span className="text-slate-300">{log.text}</span>
               </div>
             )) : (
               <div className="text-[9px] text-slate-600 italic">No incoming data...</div>
@@ -173,13 +141,11 @@ const App: React.FC = () => {
                  </button>
                </div>
                <div className="grid grid-cols-2 gap-y-2 text-[10px]">
-                 <span className="text-slate-500 font-bold">SOURCE:</span>
-                 <span className="text-white font-bold text-right">@{selectedEvent.source}</span>
-                 <span className="text-slate-500 font-bold">TYPE:</span>
+                 <span className="text-slate-500">TYPE:</span>
                  <span className="text-white font-black uppercase text-right">{selectedEvent.type}</span>
-                 <span className="text-slate-500 font-bold">REGION:</span>
+                 <span className="text-slate-500">REGION:</span>
                  <span className="text-emerald-400 font-black text-right">{selectedEvent.region}</span>
-                 <span className="text-slate-500 font-bold">SPEED:</span>
+                 <span className="text-slate-500">SPEED:</span>
                  <span className="text-white font-black text-right">{selectedEvent.speed} KM/H</span>
                </div>
             </div>
