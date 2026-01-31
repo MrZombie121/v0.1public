@@ -55,8 +55,7 @@ const getDB = () => {
             fs.writeFileSync(DB_PATH, JSON.stringify(initial, null, 2));
             return initial;
         }
-        const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
-        return data;
+        return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
     } catch (e) {
         return { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
     }
@@ -100,27 +99,17 @@ function checkOwner(req, res, next) {
     } catch (e) { res.status(403).json({ error: "Invalid token" }); }
 }
 
-// --- AUTH ENDPOINTS ---
+// --- API ENDPOINTS ---
 app.post('/api/auth/register', (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ success: false, message: "Missing credentials" });
-
     const db = getDB();
-    if (db.users.find(u => u.email === email)) {
-        return res.status(400).json({ success: false, message: "Operator already exists" });
-    }
+    if (db.users.find(u => u.email === email)) return res.status(400).json({ success: false, message: "Already exists" });
 
-    const isFirstUser = db.users.length === 0;
-    const newUser = {
-        id: 'user_' + Date.now(),
-        email,
-        password,
-        role: isFirstUser ? 'owner' : 'user'
-    };
-
+    const isFirst = db.users.length === 0;
+    const newUser = { id: 'user_' + Date.now(), email, password, role: isFirst ? 'owner' : 'user' };
     db.users.push(newUser);
     saveDB(db);
-
     const token = Buffer.from(`${email}:${password}`).toString('base64');
     res.json({ success: true, user: { email, role: newUser.role }, token });
 });
@@ -129,101 +118,70 @@ app.post('/api/auth/login', (req, res) => {
     const { email, password } = req.body;
     const db = getDB();
     const user = db.users.find(u => u.email === email && u.password === password);
-
     if (!user) return res.status(401).json({ success: false, message: "Invalid credentials" });
-
     const token = Buffer.from(`${email}:${password}`).toString('base64');
     res.json({ success: true, user: { email, role: user.role }, token });
 });
 
-// --- ADMIN/OWNER ENDPOINTS ---
 app.get('/api/admin/users', checkPrivileged, (req, res) => {
     const db = getDB();
-    const safeUsers = db.users.map(({ id, email, role }) => ({ id, email, role }));
-    res.json(safeUsers);
+    res.json(db.users.map(({ id, email, role }) => ({ id, email, role })));
 });
 
 app.post('/api/admin/system-reset', checkOwner, (req, res) => {
     const initial = { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
-    if (saveDB(initial)) {
-        res.json({ success: true, message: "System wiped" });
-    } else {
-        res.status(500).json({ error: "Reset failed" });
-    }
+    if (saveDB(initial)) res.json({ success: true });
+    else res.status(500).json({ error: "Reset failed" });
 });
 
 app.patch('/api/admin/users/:id/role', checkOwner, (req, res) => {
-    const { id } = req.params;
-    const { role } = req.body;
     const db = getDB();
-    const user = db.users.find(u => u.id === id);
-    if (user) {
-        user.role = role;
-        saveDB(db);
-        res.json({ success: true });
-    } else res.status(404).json({ error: "User not found" });
+    const user = db.users.find(u => u.id === req.params.id);
+    if (user) { user.role = req.body.role; saveDB(db); res.json({ success: true }); }
+    else res.status(404).json({ error: "Not found" });
 });
 
 app.post('/api/admin/sources', checkPrivileged, (req, res) => {
-    const { name, type } = req.body;
     const db = getDB();
-    const newSource = { id: 's_' + Date.now(), name, type, enabled: true };
+    const newSource = { id: 's_' + Date.now(), name: req.body.name, type: req.body.type, enabled: true };
     db.sources.push(newSource);
     saveDB(db);
     res.json({ success: true });
 });
 
 app.delete('/api/admin/sources/:id', checkPrivileged, (req, res) => {
-    const { id } = req.params;
     const db = getDB();
-    db.sources = db.sources.filter(s => s.id !== id);
+    db.sources = db.sources.filter(s => s.id !== req.params.id);
     saveDB(db);
     res.json({ success: true });
 });
 
 app.delete('/api/admin/event/:id', checkPrivileged, (req, res) => {
-    const { id } = req.params;
     const db = getDB();
-    db.events = db.events.filter(e => e.id !== id);
+    db.events = db.events.filter(e => e.id !== req.params.id);
     saveDB(db);
     res.json({ success: true });
 });
 
-// Batch delete all test events
 app.delete('/api/admin/events/tests', checkPrivileged, (req, res) => {
     const db = getDB();
     db.events = db.events.filter(e => e.isVerified !== false);
     saveDB(db);
-    res.json({ success: true, message: "All test signals purged" });
+    res.json({ success: true });
 });
 
-// --- PUBLIC DATA ENDPOINTS ---
-app.get('/api/sources', (req, res) => {
-    const db = getDB();
-    res.json(db.sources || []);
-});
-
+app.get('/api/sources', (req, res) => res.json(getDB().sources || []));
 app.get('/api/events', (req, res) => {
     const db = getDB();
-    const now = Date.now();
-    const validEvents = (db.events || []).filter(e => now - e.timestamp < 3600000);
-    res.json({ 
-        events: validEvents, 
-        logs: (db.logs || []).slice(0, 50), 
-        systemInitialized: (db.users || []).length > 0 
-    });
+    const valid = (db.events || []).filter(e => Date.now() - e.timestamp < 3600000);
+    res.json({ events: valid, logs: (db.logs || []).slice(0, 50), systemInitialized: (db.users || []).length > 0 });
 });
 
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
-    if (!text) return res.status(400).json({ error: "Empty text" });
-
     const result = await processTacticalText(text, source);
-    if (result) {
-        res.json({ success: true, ...result });
-    } else {
-        res.status(422).json({ success: false, message: "Failed to parse" });
-    }
+    if (result) res.json({ success: true, ...result });
+    else res.status(422).json({ success: false });
 });
 
 async function processTacticalText(text, source) {
@@ -232,54 +190,50 @@ async function processTacticalText(text, source) {
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash-latest",
-            contents: `Analyze: "${text}". Identify air threats. 
-            Format: TYPE:[shahed|missile|kab] REGION:[id] LAT:[lat] LNG:[lng] DIR:[0-360]`,
+            contents: `Identify threats: "${text}". TYPE:[shahed|missile|kab] REGION:[id] LAT:[lat] LNG:[lng] DIR:[0-360]`,
             config: { tools: [{ googleMaps: {} }] }
         });
-        
         const raw = response.text || "";
-        const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
-        const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
-        const regionMatch = raw.match(/REGION:\s*([a-z_]+)/i);
-        const typeMatch = raw.match(/TYPE:\s*(shahed|missile|kab)/i);
-        const dirMatch = raw.match(/DIR:\s*(\d+)/i);
-
-        let lat = latMatch ? parseFloat(latMatch[1]) : null;
-        let lng = lngMatch ? parseFloat(lngMatch[1]) : null;
-        let region = regionMatch ? regionMatch[1].toLowerCase() : 'grid';
-
-        if ((!lat || !lng) && REGION_COORDS[region]) {
-            lat = REGION_COORDS[region].lat;
-            lng = REGION_COORDS[region].lng;
-        }
-
+        const lat = parseFloat(raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
+        const lng = parseFloat(raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
+        const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1].toLowerCase() || 'grid';
+        
         if (lat && lng) {
             const db = getDB();
-            const newEvent = { 
+            const event = {
                 id: 'ev_' + Date.now(),
-                type: (typeMatch ? typeMatch[1].toLowerCase() : 'shahed'),
+                type: raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1].toLowerCase() || 'shahed',
                 region, lat, lng, 
-                direction: (dirMatch ? parseInt(dirMatch[1]) : 180),
-                timestamp: Date.now(), 
-                source, rawText: text, isVerified: !text.toLowerCase().includes('тест'), 
-                speed: (raw.includes('missile') ? 850 : 185)
+                direction: parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1]) || 180,
+                timestamp: Date.now(), source, rawText: text,
+                isVerified: !text.toLowerCase().includes('тест'),
+                speed: raw.includes('missile') ? 850 : 185
             };
-            db.events.push(newEvent);
-            db.logs.unshift({ id: 'log_'+Date.now(), text: `CONTACT: ${newEvent.type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
+            db.events.push(event);
+            db.logs.unshift({ id: 'log_'+Date.now(), text: `CONTACT: ${event.type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
             saveDB(db);
-            return { event: newEvent };
+            return { event };
         }
     } catch (e) { console.error(e); }
     return null;
 }
 
+// --- HOSTING STATIC SERVING ---
 const distPath = path.join(__dirname, 'dist');
-if (fs.existsSync(distPath)) app.use(express.static(distPath));
+if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+}
 app.use(express.static(__dirname));
+
 app.get('*', (req, res) => {
-    if (req.path.startsWith('/api/')) return res.status(404).send("404");
+    // API 404
+    if (req.path.startsWith('/api/')) return res.status(404).json({ error: "API Route Not Found" });
+    
+    // SPA Fallback: check dist first, then root
+    const distIndex = path.join(distPath, 'index.html');
+    if (fs.existsSync(distIndex)) return res.sendFile(distIndex);
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Tactical Node Active on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Tactical Hub active on ${PORT}`));

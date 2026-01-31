@@ -44,10 +44,9 @@ const App: React.FC = () => {
   });
 
   const getApiUrl = (path: string) => {
-    const baseUrl = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') 
-      ? `http://${window.location.hostname}:3000` 
-      : '';
-    return `${baseUrl}${path}`;
+    // Relative paths in production, explicit localhost in dev
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    return isLocal && window.location.port !== '3000' ? `http://localhost:3000${path}` : path;
   };
 
   const refreshData = useCallback(async () => {
@@ -65,8 +64,7 @@ const App: React.FC = () => {
 
       const resSources = await fetch(getApiUrl('/api/sources'));
       if (resSources.ok) {
-        const sourceData = await resSources.json();
-        setSources(sourceData || []);
+        setSources(await resSources.json());
       }
     } catch (err) {
       setSystemError("NODE LINK LOST");
@@ -80,10 +78,7 @@ const App: React.FC = () => {
     try {
       await fetch(getApiUrl('/api/ingest'), {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'auth-token': token || ''
-        },
+        headers: { 'Content-Type': 'application/json', 'auth-token': token || '' },
         body: JSON.stringify({ text: 'тест', source: 'HUD_ADMIN_FORCE' })
       });
       refreshData();
@@ -202,6 +197,7 @@ const App: React.FC = () => {
             localStorage.setItem('skywatch_user', JSON.stringify(u));
             localStorage.setItem('skywatch_token', token);
             setShowAuth(false);
+            refreshData();
           }} onClose={() => setShowAuth(false)} 
         />
       )}

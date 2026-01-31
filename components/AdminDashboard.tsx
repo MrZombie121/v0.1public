@@ -36,8 +36,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
   const hasTests = events.some(e => e.isVerified === false || e.rawText?.toLowerCase().includes('тест'));
 
   const getApiUrl = (path: string) => {
-    const isDev = window.location.port === '5173' || window.location.port === '5174';
-    return isDev ? `http://localhost:3000${path}` : path;
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    return isLocal && window.location.port !== '3000' ? `http://localhost:3000${path}` : path;
   };
 
   const fetchData = async () => {
@@ -90,9 +90,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
         headers: { 'auth-token': token || '' }
       });
       if (res.ok) {
-        // Events will be refreshed by the parent App component's interval
-        // but we can trigger a manual check if needed by providing a callback.
-        // For now, it will disappear on next poll.
+        // Force refresh local view if we can, otherwise user waits for 5s poll
+        await fetchData(); 
       }
     } catch (e) { console.error(e); }
     setIsPurgingTests(false);
@@ -183,15 +182,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
                     <tr key={e.id} className="hover:bg-white/5">
                       <td className="py-4">
                         <div className="flex items-center gap-2">
-                          <div className={`w-2 h-2 rounded-full ${(!e.isVerified || e.rawText?.toLowerCase().includes('тест')) ? 'bg-sky-400 animate-pulse' : (e.type === 'missile' ? 'bg-rose-500' : 'bg-rose-400')}`} />
+                          <div className={`w-2.5 h-2.5 rounded-full ${(!e.isVerified || e.rawText?.toLowerCase().includes('тест')) ? 'bg-sky-400 animate-pulse shadow-[0_0_8px_rgba(56,189,248,0.5)]' : (e.type === 'missile' ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]' : 'bg-rose-400')}`} />
                           <span className="font-black uppercase">{e.type}</span>
-                          {(!e.isVerified || e.rawText?.toLowerCase().includes('тест')) && <span className="text-[8px] font-bold text-sky-500 px-1.5 py-0.5 bg-sky-500/10 rounded uppercase tracking-tighter ml-1">Test</span>}
+                          {(!e.isVerified || e.rawText?.toLowerCase().includes('тест')) && <span className="text-[8px] font-bold text-sky-500 px-1.5 py-0.5 bg-sky-500/10 rounded uppercase tracking-tighter ml-1 border border-sky-500/20">Test</span>}
                         </div>
                       </td>
                       <td className="py-4 text-emerald-400 font-bold">{e.region}</td>
                       <td className="py-4 text-slate-400 italic">@{e.source}</td>
                       <td className="py-4 text-right">
-                        <button onClick={() => onDelete(e.id)} className="p-2 text-rose-500/50 hover:text-rose-500"><Trash2 size={16} /></button>
+                        <button onClick={() => onDelete(e.id)} className="p-2 text-rose-500/50 hover:text-rose-500 transition-colors"><Trash2 size={16} /></button>
                       </td>
                     </tr>
                   ))}
@@ -228,9 +227,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
                         {isOwner && u.role !== 'owner' && (
                           <>
                             {u.role === 'admin' ? (
-                              <button onClick={() => updateRole(u.id, 'user')} className="p-2 text-amber-500/50 hover:text-amber-500" title="Demote to User"><ShieldOff size={16} /></button>
+                              <button onClick={() => updateRole(u.id, 'user')} className="p-2 text-amber-500/50 hover:text-amber-500 transition-colors" title="Demote to User"><ShieldOff size={16} /></button>
                             ) : (
-                              <button onClick={() => updateRole(u.id, 'admin')} className="p-2 text-emerald-500/50 hover:text-emerald-500" title="Promote to Admin"><Shield size={16} /></button>
+                              <button onClick={() => updateRole(u.id, 'admin')} className="p-2 text-emerald-500/50 hover:text-emerald-500 transition-colors" title="Promote to Admin"><Shield size={16} /></button>
                             )}
                           </>
                         )}
@@ -277,7 +276,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
             <div className="space-y-6">
               <div className="flex gap-3">
                 <input type="text" value={newSourceName} onChange={(e) => setNewSourceName(e.target.value)} placeholder="Telegram channel name..." className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-sky-500/50" />
-                <button onClick={addSource} className="bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-bold text-xs uppercase"><Plus size={16} /> Add Source</button>
+                <button onClick={addSource} className="bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-bold text-xs uppercase transition-colors"><Plus size={16} /> Add Source</button>
               </div>
               <table className="w-full text-left text-xs">
                 <thead className="text-slate-500 uppercase font-black tracking-widest border-b border-white/5">
@@ -285,7 +284,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {sources.map(s => (
-                    <tr key={s.id} className="hover:bg-white/5"><td className="py-4 font-bold text-sky-400 flex items-center gap-2"><Link size={12} className="text-slate-500"/> @{s.name}</td><td className="py-4 text-slate-400 uppercase font-black text-[9px]">{s.type}</td><td className="py-4 text-right"><button onClick={() => deleteSource(s.id)} className="p-2 text-rose-500/50 hover:text-rose-500"><Trash2 size={16} /></button></td></tr>
+                    <tr key={s.id} className="hover:bg-white/5"><td className="py-4 font-bold text-sky-400 flex items-center gap-2"><Link size={12} className="text-slate-500"/> @{s.name}</td><td className="py-4 text-slate-400 uppercase font-black text-[9px]">{s.type}</td><td className="py-4 text-right"><button onClick={() => deleteSource(s.id)} className="p-2 text-rose-500/50 hover:text-rose-500 transition-colors"><Trash2 size={16} /></button></td></tr>
                   ))}
                 </tbody>
               </table>
