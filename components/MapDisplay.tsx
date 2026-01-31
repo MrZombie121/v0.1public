@@ -10,8 +10,9 @@ interface MapDisplayProps {
 }
 
 const GEOJSON_SOURCES = [
-  'https://cdn.jsdelivr.net/gh/EugeneBoryshpolets/ukraine_geojson@main/ukraine_regions.json',
-  'https://raw.githubusercontent.com/EugeneBoryshpolets/ukraine_geojson/main/ukraine_regions.json'
+  'https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/regions.json', // Placeholder check
+  'https://raw.githubusercontent.com/VadimGue/ukraine-geojson/master/ukraine.json',
+  'https://cdn.jsdelivr.net/gh/EugeneBoryshpolets/ukraine_geojson@main/ukraine_regions.json'
 ];
 
 const REGION_ID_MAP: Record<string, string> = {
@@ -60,9 +61,15 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   }, []);
 
   const loadGeoJSON = async () => {
-    for (const url of GEOJSON_SOURCES) {
+    // Attempt multiple sources
+    const urls = [
+      'https://cdn.jsdelivr.net/gh/EugeneBoryshpolets/ukraine_geojson@main/ukraine_regions.json',
+      'https://raw.githubusercontent.com/VadimGue/ukraine-geojson/master/ukraine.json'
+    ];
+    
+    for (const url of urls) {
       try {
-        const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        const response = await fetch(url);
         if (response.ok) {
           const data = await response.json();
           if (mapRef.current) {
@@ -72,7 +79,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
           }
         }
       } catch (e) {
-        console.warn(`GeoJSON Load failed from ${url}:`, e);
+        console.warn("GeoJSON URL failed:", url);
       }
     }
     setGridStatus('offline');
@@ -94,25 +101,20 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
     
-    try {
-      const map = L.map(mapContainerRef.current, {
-        center: [48.3794, 31.1656],
-        zoom: 6,
-        zoomControl: false,
-        maxBounds: UKRAINE_BOUNDS,
-        attributionControl: false
-      });
+    const map = L.map(mapContainerRef.current, {
+      center: [48.3794, 31.1656],
+      zoom: 6,
+      zoomControl: false,
+      maxBounds: UKRAINE_BOUNDS,
+      attributionControl: false
+    });
 
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-      mapRef.current = map;
-      
-      loadGeoJSON();
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+    mapRef.current = map;
+    
+    loadGeoJSON();
 
-      // Ensure map is correctly sized
-      setTimeout(() => map.invalidateSize(), 100);
-    } catch (err) {
-      console.error("Leaflet Initialization Error:", err);
-    }
+    setTimeout(() => map.invalidateSize(), 500);
 
     return () => { 
       if (mapRef.current) {
@@ -137,7 +139,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
         if (!p) return;
         
         let regionId = null;
-        const names = [p.name, p.name_en, p.NAME_1, p.id];
+        const names = [p.name, p.name_en, p.NAME_1, p.id, p.region_id];
         for (const n of names) {
           const norm = normalizeStr(n);
           if (REGION_ID_MAP[norm]) { regionId = REGION_ID_MAP[norm]; break; }
@@ -164,15 +166,20 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
     }
 
     events.forEach(event => {
-      if (typeof event.lat !== 'number' || typeof event.lng !== 'number') return;
+      // Use lat/lng or startLat/startLng as fallback
+      const baseLat = event.lat || event.startLat;
+      const baseLng = event.lng || event.startLng;
+
+      if (typeof baseLat !== 'number' || typeof baseLng !== 'number') return;
 
       const elapsedHours = (Date.now() - event.timestamp) / 3600000;
-      const dist = (event.speed || 180) * elapsedHours;
+      const speed = event.speed || 180;
+      const dist = speed * elapsedHours;
       const rad = (event.direction * Math.PI) / 180;
       
       const currentPos: [number, number] = [
-        event.lat + (dist * Math.cos(rad)) / 111.32, 
-        event.lng + (dist * Math.sin(rad)) / (111.32 * Math.cos(event.lat * Math.PI / 180))
+        baseLat + (dist * Math.cos(rad)) / 111.32, 
+        baseLng + (dist * Math.sin(rad)) / (111.32 * Math.cos(baseLat * Math.PI / 180))
       ];
 
       let color = event.isVerified ? TARGET_COLORS.REAL : TARGET_COLORS.TEST;
@@ -203,7 +210,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   }, [events, ticker, onSelectEvent]);
 
   return (
-    <div className="relative flex-1 w-full h-full min-h-0 overflow-hidden">
+    <div className="relative flex-1 w-full h-full min-h-0">
       <div ref={mapContainerRef} className="w-full h-full absolute inset-0 z-0 bg-[#020617]" />
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1001] glass-panel px-5 py-2 rounded-full border border-white/10 flex items-center gap-3 shadow-2xl backdrop-blur-md">
          <div className={`w-2.5 h-2.5 rounded-full animate-pulse shadow-[0_0_10px] ${gridStatus === 'online' ? 'bg-emerald-500 shadow-emerald-500' : gridStatus === 'syncing' ? 'bg-amber-500 shadow-amber-500' : 'bg-rose-500 shadow-rose-500'}`} />
