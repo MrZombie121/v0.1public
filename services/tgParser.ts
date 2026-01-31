@@ -1,81 +1,64 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { TargetType, AirEvent, ParsedModifier } from '../types';
 
 export class TGParser {
+  private static parseGrounded(text: string) {
+    const latMatch = text.match(/LAT:\s*([\d.]+)/i);
+    const lngMatch = text.match(/LNG:\s*([\d.]+)/i);
+    const typeMatch = text.match(/TYPE:\s*(shahed|missile|kab)/i);
+    const regionMatch = text.match(/REGION:\s*([a-z_]+)/i);
+    const dirMatch = text.match(/DIR:\s*(\d+)/i);
+    const clearMatch = text.match(/CLEAR:\s*(true|false)/i);
+
+    return {
+      type: typeMatch ? typeMatch[1].toLowerCase() : 'shahed',
+      region: regionMatch ? regionMatch[1].toLowerCase() : 'sea',
+      lat: latMatch ? parseFloat(latMatch[1]) : null,
+      lng: lngMatch ? parseFloat(lngMatch[1]) : null,
+      direction: dirMatch ? parseInt(dirMatch[1], 10) : 180,
+      isClear: clearMatch ? clearMatch[1] === 'true' : false
+    };
+  }
+
   public static async parseAI(text: string): Promise<{ event: Partial<AirEvent>, modifiers: ParsedModifier } | null> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Сообщение: "${text}"`,
+        model: "gemini-2.5-flash",
+        contents: `Analyze for SkyWatch: "${text}". Use Google Maps for coordinates.
+        Format output:
+        TYPE: [shahed|missile|kab]
+        REGION: [id]
+        LAT: [lat]
+        LNG: [lng]
+        DIR: [dir]
+        CLEAR: [true|false]`,
         config: {
-          systemInstruction: `Ты — тактический анализатор SkyWatch. 
-          Твоя задача: Разделить текст на ТОЧКУ ВЫЛЕТА/ТЕКУЩУЮ (originRegion) и ЦЕЛЬ (region).
-          
-          ВАЖНО ПО МОРЮ:
-          Если в тексте есть "с моря", "над морем", "через море", "со стороны моря" — ОБЯЗАТЕЛЬНО ставь spawnModifier: "sea".
-          
-          ВАЖНО ПО ОДЕССЕ:
-          Аркадия, Фонтан, Ланжерон, Слободка, Поскот, Таирова, Черемушки, Лузановка — это всё РАЙОНЫ ОДЕССЫ.
-          Если цель "на Аркадию", region должен быть "Odesa", но ты можешь указать в originRegion или spatialOffset дополнительные детали.
-          
-          ПРАВИЛА:
-          1. "из [А] на [Б]" -> originRegion: А, region: Б.
-          2. "между [А] и [Б] на [ЦЕЛЬ]" -> midpointRegions: [А, Б], region: ЦЕЛЬ.
-          3. "[Направление] [Города]" -> Определи spatialOffset (north, south, east, west, north-east, etc).
-          4. Типы: shahed (дроны), missile (ракеты), kab (бомбы).
-          
-          Верни JSON: { 
-            type: string, 
-            region: string, 
-            originRegion: string | null,
-            midpointRegions: string[] | null,
-            spatialOffset: string | null,
-            isClear: boolean,
-            isUserTest: boolean,
-            spawnModifier: 'sea'|'border'|'normal' 
-          }`,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              type: { type: Type.STRING, enum: ['shahed', 'missile', 'kab'] },
-              region: { type: Type.STRING },
-              originRegion: { type: Type.STRING, nullable: true },
-              midpointRegions: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
-              spatialOffset: { type: Type.STRING, nullable: true, enum: ['north', 'south', 'east', 'west', 'north-east', 'north-west', 'south-east', 'south-west'] },
-              isClear: { type: Type.BOOLEAN },
-              isUserTest: { type: Type.BOOLEAN },
-              spawnModifier: { type: Type.STRING, enum: ['sea', 'border', 'normal'] }
-            },
-            required: ["type", "region", "isClear", "isUserTest"]
-          }
+          tools: [{ googleMaps: {} }]
         }
       });
 
-      const data = JSON.parse(response.text);
+      const data = this.parseGrounded(response.text);
+
       return {
         event: { 
           type: data.type as TargetType, 
           region: data.region, 
-          originRegion: data.originRegion, 
-          midpointRegions: data.midpointRegions,
-          spatialOffset: data.spatialOffset,
+          lat: data.lat || undefined,
+          lng: data.lng || undefined,
+          direction: data.direction,
           rawText: text 
         },
         modifiers: {
           isClear: data.isClear,
-          isUserTest: data.isUserTest,
-          spawnModifier: data.spawnModifier || 'normal',
-          originRegion: data.originRegion,
-          midpointRegions: data.midpointRegions,
-          spatialOffset: data.spatialOffset
+          isUserTest: false,
+          spawnModifier: 'normal'
         }
       };
     } catch (error) {
-      console.error("AI Parsing failed:", error);
+      console.error("AI Grounding failed:", error);
       return null;
     }
   }

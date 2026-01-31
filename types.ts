@@ -16,21 +16,22 @@ export interface LogEntry {
 export interface AirEvent {
   id: string;
   type: TargetType;
-  region: string;
-  originRegion?: string; 
-  midpointRegions?: string[];
-  spatialOffset?: 'north' | 'south' | 'east' | 'west' | 'north-east' | 'north-west' | 'south-east' | 'south-west' | null;
+  region: string; // Oblast ID
+  cityName?: string;
   startLat: number;
   startLng: number;
+  lat?: number; // Precise AI-detected latitude
+  lng?: number; // Precise AI-detected longitude
   direction: number; 
   speed: number; 
   timestamp: number;
-  isTest: boolean; 
   isUserTest: boolean; 
   isVerified: boolean;
-  reliability: 'low' | 'high' | 'official';
   source: string;
   rawText?: string;
+  originRegion?: string | null;
+  midpointRegions?: string[] | null;
+  spatialOffset?: string | null;
 }
 
 export interface FilterState {
@@ -38,21 +39,21 @@ export interface FilterState {
   showTest: boolean;
 }
 
-export interface ParsedModifier {
-  isSea?: boolean;
-  isBorder?: boolean;
-  isUserTest?: boolean;
-  isClear?: boolean;
-  spawnModifier?: 'sea' | 'border' | 'normal';
-  originRegion?: string;
-  midpointRegions?: string[];
-  spatialOffset?: string;
-}
-
 export interface RegionData {
+  id: string;
   name: string;
   center: [number, number];
+  radius: number; 
   keywords: string[];
   isCoastal?: boolean;
   isBorder?: boolean;
+}
+
+export interface ParsedModifier {
+  isClear: boolean;
+  isUserTest: boolean;
+  spawnModifier: 'sea' | 'border' | 'normal';
+  originRegion?: string | null;
+  midpointRegions?: string[] | null;
+  spatialOffset?: string | null;
 }

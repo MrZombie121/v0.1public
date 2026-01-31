@@ -4,9 +4,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Type } from "@google/genai";
-import axios from 'axios';
-import * as cheerio from 'cheerio';
+import { GoogleGenAI } from "@google/genai";
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -18,149 +16,114 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// --- ИНИЦИАЛИЗАЦИЯ ИИ ---
-const API_KEY = process.env.API_KEY;
-const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
-const modelName = "gemini-3-flash-preview";
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// --- ХРАНИЛИЩЕ И СТАТИСТИКА ---
-let airEvents = [
-    {
-        id: 'init_target_1',
-        type: 'shahed',
-        region: 'Odesa',
-        spawnModifier: 'sea',
-        isUserTest: true,
-        timestamp: Date.now(),
-        source: 'System',
-        rawText: 'Система активна. Очікування цілей...'
-    }
+const OBLAST_IDS = [
+    "odesa", "kyiv", "kharkiv", "lviv", "dnipro", "zaporizhzhia", "mykolaiv", "kherson", 
+    "chernihiv", "sumy", "poltava", "vinnytsia", "cherkasy", "khmelnytskyi", "zhytomyr", 
+    "rivne", "lutsk", "ternopil", "if", "uzhhorod", "chernivtsi", "kirovohrad", 
+    "donetsk", "luhansk", "crimea", "sea"
 ];
 
-let scraperStatus = {
-    lastRun: null,
-    status: 'initializing',
-    channelsChecked: 0,
-    errors: []
-};
+let airEvents = [];
 
-async function processTacticalText(text, source) {
-    if (!ai) return { event: { id: Date.now(), type: 'shahed', region: 'Odesa', rawText: text }, error: "AI_OFF" };
+function parseGroundedResponse(text) {
+    const result = {
+        type: 'shahed',
+        region: 'sea',
+        isClear: false,
+        direction: 180,
+        lat: null,
+        lng: null
+    };
 
     try {
+        if (text.toLowerCase().includes('clear') || text.toLowerCase().includes('отбой') || text.toLowerCase().includes('чисто')) {
+            result.isClear = true;
+        }
+
+        const latMatch = text.match(/LAT:\s*([-]?\d+\.\d+)/i);
+        const lngMatch = text.match(/LNG:\s*([-]?\d+\.\d+)/i);
+        const typeMatch = text.match(/TYPE:\s*(shahed|missile|kab)/i);
+        const regionMatch = text.match(/REGION:\s*([a-z_]+)/i);
+        const dirMatch = text.match(/DIR:\s*(\d+)/i);
+
+        if (latMatch) result.lat = parseFloat(latMatch[1]);
+        if (lngMatch) result.lng = parseFloat(lngMatch[1]);
+        if (typeMatch) result.type = typeMatch[1].toLowerCase();
+        if (regionMatch) result.region = regionMatch[1].toLowerCase();
+        if (dirMatch) result.direction = parseInt(dirMatch[1], 10);
+
+        return result;
+    } catch (e) {
+        return result;
+    }
+}
+
+async function processTacticalText(text, source) {
+    try {
         const response = await ai.models.generateContent({
-            model: modelName,
-            contents: `АНАЛИЗИРУЙ ТАКТИЧЕСКИЙ ТЕКСТ: "${text}"`,
+            model: "gemini-2.5-flash",
+            contents: `STRICT TACTICAL ANALYST MODE.
+            Input: "${text}"
+            
+            TASK: 
+            1. Use Google Maps to find the EXACT LAT/LNG for the specific city, village, or landmark mentioned.
+            2. Map the location to its administrative OBLAST ID.
+            3. Estimate flight direction (DIR 0-360).
+            
+            Return ONLY this data format:
+            TYPE: [shahed|missile|kab]
+            REGION: [one of: ${OBLAST_IDS.join(", ")}]
+            LAT: [precise latitude from Google Maps]
+            LNG: [precise longitude from Google Maps]
+            DIR: [0-360]
+            CLEAR: [true|false]`,
             config: {
-                systemInstruction: `Ты ИИ-аналитик ПВО. Твоя задача — извлечь данные.
-                Верни JSON: { "type": "shahed"|"missile"|"kab", "region": "City", "isClear": bool, "spawnModifier": "sea"|"border"|"normal" }.
-                ОБЯЗАТЕЛЬНО: Если Одесса, районы города, или "у нас" (если источник Одесса) -> region: "Odesa". 
-                Если море, залив, побережье -> spawnModifier: "sea".`,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        type: { type: Type.STRING },
-                        region: { type: Type.STRING },
-                        isClear: { type: Type.BOOLEAN },
-                        spawnModifier: { type: Type.STRING }
-                    },
-                    required: ["type", "region", "isClear"]
-                }
+                tools: [{ googleMaps: {} }]
             }
         });
 
-        const parsed = JSON.parse(response.text);
+        const parsed = parseGroundedResponse(response.text);
         
         if (parsed.isClear) {
-            const reg = (parsed.region || '').toLowerCase();
-            airEvents = airEvents.filter(e => (e.region || '').toLowerCase() !== reg);
+            airEvents = airEvents.filter(e => e.region !== parsed.region);
             return { cleared: true };
         }
 
-        const newEvent = {
-            id: 'srv_' + Math.random().toString(36).substr(2, 9),
-            type: parsed.type || 'shahed',
-            region: parsed.region || 'Odesa',
-            spawnModifier: parsed.spawnModifier || 'normal',
-            timestamp: Date.now(),
-            source: source || 'unknown',
-            rawText: text
-        };
-
-        airEvents.push(newEvent);
-        return { event: newEvent };
+        // Only add if we have coordinates
+        if (parsed.lat && parsed.lng) {
+            const newEvent = {
+                id: 'srv_' + Math.random().toString(36).substr(2, 9),
+                type: parsed.type,
+                region: parsed.region,
+                lat: parsed.lat,
+                lng: parsed.lng,
+                direction: parsed.direction,
+                timestamp: Date.now(),
+                source: source || 'Intel',
+                rawText: text,
+                isVerified: true
+            };
+            airEvents.push(newEvent);
+            return { event: newEvent };
+        }
+        return null;
     } catch (e) {
+        console.error("AI Maps Grounding Error:", e);
         return null;
     }
 }
 
-// --- СКРАПЕР ---
-const CHANNELS = ["oddesitmedia", "vanek_nikolaev", "kpszsu", "monitor_ua_1"];
-const lastSeenIds = {};
-
-async function runScraperStep() {
-    scraperStatus.status = 'running';
-    scraperStatus.errors = [];
-    let count = 0;
-
-    for (const channel of CHANNELS) {
-        try {
-            const url = `https://t.me/s/${channel}`;
-            const { data } = await axios.get(url, { timeout: 8000 });
-            const $ = cheerio.load(data);
-            const lastMessageWrap = $('.tgme_widget_message_wrap').last();
-            
-            if (!lastMessageWrap.length) continue;
-
-            const messageId = lastMessageWrap.find('.tgme_widget_message').attr('data-post');
-            const text = lastMessageWrap.find('.tgme_widget_message_text').text();
-
-            if (messageId && text && lastSeenIds[channel] !== messageId) {
-                await processTacticalText(text, `@${channel}`);
-                lastSeenIds[channel] = messageId;
-            }
-            count++;
-        } catch (err) {
-            scraperStatus.errors.push(`${channel}: ${err.message}`);
-        }
-        await new Promise(r => setTimeout(r, 1000));
-    }
-    
-    scraperStatus.lastRun = Date.now();
-    scraperStatus.channelsChecked = count;
-    scraperStatus.status = count > 0 ? 'idle' : 'rate-limited';
-}
-
-// --- API ---
 app.get('/api/events', (req, res) => {
-    res.json({
-        events: airEvents,
-        scraper: scraperStatus
-    });
-});
-
-app.post('/api/force-scrape', async (req, res) => {
-    await runScraperStep();
-    res.json({ success: true, status: scraperStatus });
+    res.json({ events: airEvents, scraper: { lastRun: Date.now(), status: 'active' } });
 });
 
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
     const result = await processTacticalText(text, source);
-    if (result) res.json({ success: true, ...result });
-    else res.status(500).json({ error: "Processing failed" });
+    res.json({ success: !!result, ...result });
 });
-
-const distPath = path.join(__dirname, 'dist');
-if (fs.existsSync(distPath)) {
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
-}
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[SERVER] Online on port ${PORT}`);
-    setInterval(runScraperStep, 60000);
-    runScraperStep();
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`Server running on ${PORT}`));

@@ -77,7 +77,10 @@ const App: React.FC = () => {
             <ShieldCheck size={20} className="text-rose-500" />
           </div>
           <div>
-            <h1 className="text-lg font-black tracking-tighter uppercase leading-none">SkyWatch</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-black tracking-tighter uppercase leading-none">SkyWatch</h1>
+              <span className="text-[9px] bg-rose-500/10 text-rose-500 px-1.5 py-0.5 rounded border border-rose-500/20 font-bold uppercase tracking-widest">v1.0</span>
+            </div>
             <div className="flex items-center gap-1.5 mt-1">
               <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${scraperInfo?.status === 'rate-limited' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
               <span className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">

@@ -2,83 +2,45 @@
 import { TargetType, RegionData } from './types';
 
 export const UKRAINE_BOUNDS: [[number, number], [number, number]] = [
-  [44.38, 22.13], 
-  [52.37, 40.22]
-];
-
-export const MONITORING_CHANNELS = [
-  { id: '1', name: 'Николаевский Ванёк', username: 'vanek_nikolaev', url: 'https://t.me/vanek_nikolaev', isOfficial: false },
-  { id: '2', name: 'Повітряні Сили ЗСУ', username: 'kpszsu', url: 'https://t.me/kpszsu', isOfficial: true },
-  { id: '5', name: 'Odecit', username: 'oddesitmedia', url: 'https://t.me/oddesitmedia', isOfficial: false },
-  { id: '3', name: 'Monitoring', username: 'monitor_ua_1', url: 'https://t.me/monitor_ua_1', isOfficial: false }
+  [43.0, 22.0], 
+  [53.5, 41.5]
 ];
 
 export const REGIONS: RegionData[] = [
-  // --- ODESA REGION & DISTRICTS ---
-  { name: "Odesa", center: [46.4825, 30.7233], keywords: ["одеса", "одесса", "фонтан", "центр", "аркадия", "аркадія", "ланжерон", "пересыпь", "пересип", "лузановка", "лузанівка", "слободка", "слобідка"], isCoastal: true },
-  { name: "KotovskyDist", center: [46.5843, 30.7954], keywords: ["селище котовського", "поселок котовского", "поскот", "котовського", "котовского"], isCoastal: true },
-  { name: "Tairova", center: [46.3944, 30.7103], keywords: ["таїрова", "таирова", "вузовский", "червоний хутір"] },
-  { name: "Cheryomushki", center: [46.4326, 30.6922], keywords: ["черемушки", "черемушках", "гайдара", "филатова"] },
-  { name: "Moldavanka", center: [46.4667, 30.7167], keywords: ["молдаванка", "молдаванке"] },
-  { name: "Yuzhne", center: [46.6213, 31.1011], keywords: ["южне", "южное"], isCoastal: true },
-  { name: "Krasnosilka", center: [46.5866, 30.7678], keywords: ["красносілка", "красноселка"] },
-  { name: "Chornomorske_Od", center: [46.5911, 30.9397], keywords: ["чорноморське", "черноморское"], isCoastal: true },
-  { name: "Ovidiopol", center: [46.2415, 30.4431], keywords: ["овідіополь", "овидиополь"] },
-  { name: "Chornomorsk", center: [46.2991, 30.6481], keywords: ["чорноморськ", "черноморск", "ильичевск"], isCoastal: true },
-  { name: "Zatoka", center: [46.0658, 30.4514], keywords: ["затока", "кароліно-бугаз"], isCoastal: true },
-  { name: "Bilyaivka", center: [46.4772, 30.2033], keywords: ["біляївка", "беляевка"] },
-  { name: "Izmail", center: [45.3507, 28.8394], keywords: ["ізмаїл", "измаил"], isCoastal: true },
-  { name: "Reni", center: [45.4567, 28.2844], keywords: ["рені", "рени"], isCoastal: true },
-
-  // --- KYIV & NORTH ---
-  { name: "Kyiv", center: [50.4501, 30.5234], keywords: ["київ", "киев", "васильків", "ірпінь", "бровари"] },
-  { name: "Boryspil", center: [50.3501, 30.9500], keywords: ["бориспіль", "борисполь"] },
-  { name: "Bila Tserkva", center: [49.7989, 30.1153], keywords: ["біла церква", "белая церковь"] },
-  { name: "Chernihiv", center: [51.4982, 31.2893], keywords: ["чернігів", "чернигов"], isBorder: true },
-
-  // --- WEST ---
-  { name: "Lviv", center: [49.8397, 24.0297], keywords: ["львів", "львов", "стрий"] },
-  { name: "Lutsk", center: [50.7472, 25.3254], keywords: ["луцьк", "луцк"] },
-  { name: "Rivne", center: [50.6199, 26.2516], keywords: ["рівне", "ровно"] },
-  { name: "Ternopil", center: [49.5535, 25.5948], keywords: ["тернопіль", "тернополь"] },
-  { name: "Khmelnytskyi", center: [49.4230, 26.9871], keywords: ["хмельницький", "хмельницкий"] },
-  { name: "Ivano-Frankivsk", center: [48.9226, 24.7111], keywords: ["франківськ", "ивано-франковск"] },
-  { name: "Uzhhorod", center: [48.6208, 22.2879], keywords: ["ужгород"] },
-
-  // --- EAST & BORDER ---
-  { name: "Kharkiv", center: [49.9935, 36.2304], keywords: ["харків", "харьков", "чугуїв"], isBorder: true },
-  { name: "Sumy", center: [50.9077, 34.7981], keywords: ["суми", "сум", "конотоп"], isBorder: true },
-  { name: "Dnipro", center: [48.4647, 35.0462], keywords: ["днипро", "днепр", "павлоград"] },
-  { name: "Zaporizhzhia", center: [47.8388, 35.1396], keywords: ["запоріжжя", "запорожье"], isBorder: true },
-
-  // --- CENTRAL & TRANSIT ---
-  { name: "Poltava", center: [49.5883, 34.5514], keywords: ["полтава", "полтави", "миргород"] },
-  { name: "Kirovohrad", center: [48.5079, 32.2623], keywords: ["кропивницький", "кіровоград", "кропивницкий"] },
-  { name: "Cherkasy", center: [49.4444, 32.0598], keywords: ["черкаси", "черкассы"] },
-  { name: "Vinnytsia", center: [49.2331, 28.4682], keywords: ["вінниця", "винница"] },
-  { name: "Zhytomyr", center: [50.2547, 28.6587], keywords: ["житомир", "житомирі"] },
-  { name: "Uman", center: [48.7517, 30.2211], keywords: ["умань"] }
+  { id: "odesa", name: "Одеська область", center: [46.48, 30.72], radius: 110000, keywords: ["одеса", "ізмаїл", "чорноморськ", "южне"], isCoastal: true },
+  { id: "kyiv", name: "Київська область", center: [50.45, 30.52], radius: 95000, keywords: ["київ", "біла церква", "бровари", "бориспіль"] },
+  { id: "kharkiv", name: "Харківська область", center: [49.99, 36.23], radius: 100000, keywords: ["харків", "лозова", "ізюм"], isBorder: true },
+  { id: "lviv", name: "Львівська область", center: [49.83, 24.02], radius: 90000, keywords: ["львів", "дрогобич", "червоноград"] },
+  { id: "dnipro", name: "Дніпропетровська область", center: [48.46, 35.04], radius: 110000, keywords: ["дніпро", "кривий ріг", "кам'янське"] },
+  { id: "zaporizhzhia", name: "Запорізька область", center: [47.83, 35.13], radius: 90000, keywords: ["запоріжжя", "мелітополь", "бердянськ"], isBorder: true },
+  { id: "mykolaiv", name: "Миколаївська область", center: [46.97, 31.99], radius: 85000, keywords: ["миколаїв", "первомайськ", "очаків"], isCoastal: true },
+  { id: "kherson", name: "Херсонська область", center: [46.63, 32.61], radius: 95000, keywords: ["херсон", "каховка", "скадовськ"], isCoastal: true },
+  { id: "chernihiv", name: "Чернігівська область", center: [51.49, 31.28], radius: 95000, keywords: ["чернігів", "ніжин", "прилуки"], isBorder: true },
+  { id: "sumy", name: "Сумська область", center: [50.90, 34.79], radius: 90000, keywords: ["суми", "конотоп", "шостка"], isBorder: true },
+  { id: "poltava", name: "Полтавська область", center: [49.58, 34.55], radius: 90000, keywords: ["полтава", "кременчук", "миргород"] },
+  { id: "vinnytsia", name: "Вінницька область", center: [49.23, 28.46], radius: 90000, keywords: ["вінниця", "жмеринка", "могилів-подільський"] },
+  { id: "cherkasy", name: "Черкаська область", center: [49.44, 32.05], radius: 80000, keywords: ["черкаси", "умань", "сміла"] },
+  { id: "khmelnytskyi", name: "Хмельницька область", center: [49.42, 26.98], radius: 85000, keywords: ["хмельницький", "кам'янець-подільський"] },
+  { id: "zhytomyr", name: "Житомирська область", center: [50.25, 28.65], radius: 95000, keywords: ["житомир", "бердичів", "коростень"] },
+  { id: "rivne", name: "Рівненська область", center: [50.61, 26.25], radius: 80000, keywords: ["рівне", "вараш", "дубно"] },
+  { id: "lutsk", name: "Волинська область", center: [50.74, 25.32], radius: 80000, keywords: ["луцьк", "ковель", "волинь"] },
+  { id: "ternopil", name: "Тернопільська область", center: [49.55, 25.59], radius: 70000, keywords: ["тернопіль", "чортків"] },
+  { id: "if", name: "Івано-Франківська область", center: [48.92, 24.71], radius: 75000, keywords: ["івано-франківськ", "калуш", "коломия"] },
+  { id: "uzhhorod", name: "Закарпатська область", center: [48.62, 22.28], radius: 75000, keywords: ["ужгород", "мукачево", "закарпаття"] },
+  { id: "chernivtsi", name: "Чернівецька область", center: [48.29, 25.93], radius: 60000, keywords: ["чернівці", "хотин"] },
+  { id: "kirovohrad", name: "Кіровоградська область", center: [48.50, 32.26], radius: 85000, keywords: ["кропивницький", "олександрія"] },
+  { id: "donetsk", name: "Донецька область", center: [48.00, 37.80], radius: 95000, keywords: ["донецьк", "маріуполь", "бахмут"], isBorder: true },
+  { id: "luhansk", name: "Луганська область", center: [48.57, 39.31], radius: 90000, keywords: ["луганськ", "лисичанськ"], isBorder: true },
+  { id: "crimea", name: "АР Крим", center: [45.00, 34.00], radius: 120000, keywords: ["крим", "севастополь", "сімферополь"], isCoastal: true },
+  { id: "sea", name: "Чорне море", center: [44.50, 31.50], radius: 150000, keywords: ["море", "акваторія"], isCoastal: true }
 ];
 
-export const TACTICAL_SPAWN_POINTS = {
-  SEA: [
-    { name: 'Odesa Gulf South', coords: [46.3, 30.9] },
-    { name: 'Odesa Gulf East', coords: [46.5, 31.1] },
-    { name: 'Black Sea West', coords: [45.5, 30.5] },
-    { name: 'Black Sea South', coords: [45.0, 32.0] }
-  ],
-  BORDER: [
-    { name: 'North Border', coords: [51.5, 30.0] },
-    { name: 'East Border', coords: [50.5, 37.0] }
-  ]
-};
-
 export const TARGET_COLORS = {
-  REAL: '#ef4444', 
+  REAL: '#ff3333', 
   TEST: '#3b82f6',
   USER_TEST: '#22c55e',
-  VERIFIED: '#fbbf24',
-  UNVERIFIED: '#94a3b8'
+  ZONE_ALERT: 'rgba(239, 68, 68, 0.15)',
+  ZONE_PULSE: 'rgba(239, 68, 68, 0.4)',
+  OBLAST_BORDER: 'rgba(255, 255, 255, 0.15)',
+  OBLAST_ACTIVE_BG: 'rgba(255, 51, 51, 0.1)'
 };
-
-export const EVENT_EXPIRY_MINUTES = 30;

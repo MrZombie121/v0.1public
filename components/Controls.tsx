@@ -56,7 +56,7 @@ const Controls: React.FC<ControlsProps> = ({ filters, setFilters }) => {
         </button>
       </div>
       <div className="text-[8px] font-bold text-slate-600 uppercase tracking-widest pl-2">
-        Tactical Grid 2.4-A // System Verified
+        Tactical Grid v1.0.0 // System Verified
       </div>
     </div>
   );
