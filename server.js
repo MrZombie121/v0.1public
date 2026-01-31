@@ -140,19 +140,37 @@ app.delete('/api/admin/event/:id', checkAdmin, (req, res) => {
 async function processTacticalText(text, source) {
     if (!process.env.API_KEY) return null;
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
     try {
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
-            contents: `Analyze for SkyWatch: "${text}". 
-            Format: TYPE: [shahed|missile|kab] REGION: [id] LAT: [float] LNG: [float] DIR: [0-360] CLEAR: [true|false]`,
-            config: { tools: [{ googleMaps: {} }] }
+            contents: `Analyze this report for SkyWatch tactical interface: "${text}".
+            - Identify if it mentions air threats (shahed, missile, kab).
+            - If it's a test message (contains "тест", "test"), simulate a "shahed" detection near a major city like Odesa or Kyiv.
+            - Provide output in this EXACT format:
+            TYPE: [shahed|missile|kab]
+            REGION: [oblast_id_lowercase]
+            LAT: [latitude_decimal]
+            LNG: [longitude_decimal]
+            DIR: [heading_0_360]
+            CLEAR: [true|false]`,
+            config: { 
+              tools: [{ googleMaps: {} }],
+              systemInstruction: "You are a military tactical intelligence parser. Your goal is to map air threats onto coordinates. If coordinates are ambiguous, use a central point for the mentioned region. If it's a test, pick a visible location on the map of Ukraine."
+            }
         });
+        
         const raw = response.text;
-        const lat = parseFloat(raw.match(/LAT:\s*([-]?\d+\.\d+)/i)?.[1]);
-        const lng = parseFloat(raw.match(/LNG:\s*([-]?\d+\.\d+)/i)?.[1]);
+        // Fix regex to handle integers and decimals correctly
+        const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
+        const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
+        
+        const lat = latMatch ? parseFloat(latMatch[1]) : null;
+        const lng = lngMatch ? parseFloat(lngMatch[1]) : null;
         const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1];
         const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1] || 'shahed';
         const isClear = raw.toLowerCase().includes('clear: true');
+        
         const db = getDB();
         if (isClear && region) {
             db.events = db.events.filter(e => e.region !== region);
@@ -160,14 +178,27 @@ async function processTacticalText(text, source) {
             saveDB(db);
             return { cleared: true };
         }
+        
         if (lat && lng) {
-            const newEvent = { id: 'ev_' + Math.random().toString(36).substr(2, 9), type, region: region || 'sea', lat, lng, direction: 180, timestamp: Date.now(), source, rawText: text, isVerified: true, speed: type === 'missile' ? 850 : 185 };
+            const newEvent = { 
+                id: 'ev_' + Math.random().toString(36).substr(2, 9), 
+                type, 
+                region: region || 'sea', 
+                lat, 
+                lng, 
+                direction: parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1] || '180'), 
+                timestamp: Date.now(), 
+                source, 
+                rawText: text, 
+                isVerified: true, 
+                speed: type === 'missile' ? 850 : 185 
+            };
             db.events.push(newEvent);
-            db.logs.unshift({ id: Date.now().toString(), text: `DETECTION: ${type}`, source, timestamp: Date.now() });
+            db.logs.unshift({ id: Date.now().toString(), text: `DETECTION: ${type} @ ${region}`, source, timestamp: Date.now() });
             saveDB(db);
             return { event: newEvent };
         }
-    } catch (e) { console.error("AI Error:", e); }
+    } catch (e) { console.error("AI Ingest Error:", e); }
     return null;
 }
 
