@@ -11,7 +11,8 @@ interface MapDisplayProps {
 
 const GEOJSON_SOURCES = [
   'https://raw.githubusercontent.com/VadimGue/ukraine-geojson/master/ukraine.json',
-  'https://cdn.jsdelivr.net/gh/EugeneBoryshpolets/ukraine_geojson@main/ukraine_regions.json'
+  'https://cdn.jsdelivr.net/gh/EugeneBoryshpolets/ukraine_geojson@main/ukraine_regions.json',
+  'https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/regions/ukraine/ukraine-regions.json' // Fallback proxy logic if exists
 ];
 
 const REGION_ID_MAP: Record<string, string> = {
@@ -69,7 +70,8 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
     return () => clearInterval(interval);
   }, []);
 
-  const loadGeoJSON = async () => {
+  const loadGeoJSON = async (retryCount = 0) => {
+    setGridStatus('syncing');
     for (const url of GEOJSON_SOURCES) {
       try {
         const response = await fetch(url);
@@ -78,10 +80,16 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
         applyGeoData(data, 'online');
         return;
       } catch (e) {
-        console.warn("GeoJSON load failed for:", url);
+        console.warn(`GeoJSON attempt failed for: ${url}`);
       }
     }
-    setGridStatus('offline');
+    
+    if (retryCount < 3) {
+      console.log(`Retrying geo-sync... Attempt ${retryCount + 1}`);
+      setTimeout(() => loadGeoJSON(retryCount + 1), 5000);
+    } else {
+      setGridStatus('offline');
+    }
   };
 
   const applyGeoData = (data: any, status: 'online' | 'offline') => {
@@ -124,7 +132,11 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
     const activeRegions = new Map<string, string>();
     const activeIds = new Set(events.map(e => e.id));
 
-    events.forEach(e => activeRegions.set(e.region, e.isVerified ? TARGET_COLORS.REAL : TARGET_COLORS.TEST));
+    events.forEach(e => {
+      if (e.region) {
+        activeRegions.set(e.region, e.isVerified ? TARGET_COLORS.REAL : TARGET_COLORS.TEST);
+      }
+    });
 
     if (geojsonLayerRef.current) {
       geojsonLayerRef.current.eachLayer((layer: any) => {
@@ -141,7 +153,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
         const path = layer as L.Path;
         if (regionId && activeRegions.has(regionId)) {
           const color = activeRegions.get(regionId)!;
-          path.setStyle({ color, weight: 2, fillColor: color, fillOpacity: 0.15 + (Math.sin(ticker * 0.5) * 0.05) });
+          path.setStyle({ color, weight: 2, fillColor: color, fillOpacity: 0.2 + (Math.sin(ticker * 0.5) * 0.05) });
         } else {
           path.setStyle({ color: 'rgba(255, 255, 255, 0.1)', weight: 1, fillColor: 'transparent', fillOpacity: 0 });
         }
@@ -164,8 +176,8 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
       if (event.isUserTest || event.rawText?.toLowerCase().includes('тест')) color = TARGET_COLORS.USER_TEST;
 
       const icon = L.divIcon({ 
-        html: `<div style="transform: rotate(${event.direction}deg);" class="drop-shadow-[0_0_10px_${color}]">${getTargetIconSVG(event.type, color)}</div>`, 
-        className: 'custom-marker', iconSize: [30, 30], iconAnchor: [15, 15] 
+        html: `<div style="transform: rotate(${event.direction}deg);" class="drop-shadow-[0_0_12px_${color}]">${getTargetIconSVG(event.type, color)}</div>`, 
+        className: 'custom-marker', iconSize: [34, 34], iconAnchor: [17, 17] 
       });
 
       if (markersRef.current[event.id]) {
@@ -188,10 +200,10 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   return (
     <div className="relative w-full h-full min-h-[400px]">
       <div ref={mapContainerRef} className="w-full h-full absolute inset-0 z-0" />
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1001] glass-panel px-4 py-1.5 rounded-full border border-white/10 flex items-center gap-3 shadow-lg">
-         <div className={`w-2 h-2 rounded-full animate-pulse shadow-[0_0_8px] ${gridStatus === 'online' ? 'bg-emerald-500 shadow-emerald-500' : gridStatus === 'syncing' ? 'bg-amber-500 shadow-amber-500' : 'bg-rose-500 shadow-rose-500'}`} />
-         <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
-           {gridStatus === 'online' ? 'Map Service: Connected' : gridStatus === 'syncing' ? 'Loading Boundaries' : 'Map Service: GeoData Error'}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1001] glass-panel px-5 py-2 rounded-full border border-white/10 flex items-center gap-3 shadow-2xl backdrop-blur-md">
+         <div className={`w-2.5 h-2.5 rounded-full animate-pulse shadow-[0_0_10px] ${gridStatus === 'online' ? 'bg-emerald-500 shadow-emerald-500' : gridStatus === 'syncing' ? 'bg-amber-500 shadow-amber-500' : 'bg-rose-500 shadow-rose-500'}`} />
+         <span className="text-[11px] font-black text-slate-200 uppercase tracking-widest">
+           {gridStatus === 'online' ? 'GEO-SYNC: SECURED' : gridStatus === 'syncing' ? 'SYNCING BORDERS...' : 'GEO-SYNC: RETRYING...'}
          </span>
       </div>
     </div>

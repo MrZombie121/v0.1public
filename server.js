@@ -13,21 +13,31 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DB_PATH = path.join(__dirname, 'db.json');
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+const DEFAULT_SOURCES = [
+    { id: "s1", name: "vanek_nikolaev", type: "telegram", enabled: true },
+    { id: "s2", name: "kpszsu", type: "telegram", enabled: true },
+    { id: "s3", name: "war_monitor", type: "telegram", enabled: true },
+    { id: "s4", name: "odecit", type: "telegram", enabled: true },
+    { id: "s5", name: "oddesitmedia", type: "telegram", enabled: true }
+];
 
 const getDB = () => {
     try {
         if (!fs.existsSync(DB_PATH)) {
-            const initial = { events: [], logs: [], users: [], sources: [] };
+            const initial = { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
             fs.writeFileSync(DB_PATH, JSON.stringify(initial, null, 2));
             return initial;
         }
-        return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+        const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+        // Ensure sources exist
+        if (!data.sources || data.sources.length === 0) {
+            data.sources = DEFAULT_SOURCES;
+            saveDB(data);
+        }
+        return data;
     } catch (e) {
         console.error("DB Read Error:", e);
-        return { events: [], logs: [], users: [], sources: [] };
+        return { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
     }
 };
 
@@ -40,6 +50,10 @@ const saveDB = (data) => {
         return false;
     }
 };
+
+const app = express();
+app.use(cors());
+app.use(express.json());
 
 // --- AUTH MIDDLEWARE ---
 function checkAdmin(req, res, next) {
@@ -101,6 +115,7 @@ app.post('/api/auth/login', (req, res) => {
 app.get('/api/events', (req, res) => {
     const db = getDB();
     const now = Date.now();
+    // Increase validity to 1 hour
     const validEvents = db.events.filter(e => now - e.timestamp < 3600000);
     res.json({ events: validEvents, logs: db.logs.slice(0, 50), systemInitialized: db.users.length > 0 });
 });
@@ -111,25 +126,6 @@ app.post('/api/ingest', async (req, res) => {
     res.json({ success: !!result, ...result });
 });
 
-app.get('/api/admin/users', checkAdmin, (req, res) => {
-    const db = getDB();
-    res.json(db.users.map(u => ({ id: u.id, email: u.email, role: u.role })));
-});
-
-app.patch('/api/admin/users/:id/role', checkAdmin, (req, res) => {
-    const db = getDB();
-    const user = db.users.find(u => u.id === req.params.id);
-    if (user) { user.role = req.body.role; saveDB(db); res.json({ success: true }); }
-    else res.status(404).json({ error: "Not found" });
-});
-
-app.delete('/api/admin/users/:id', checkAdmin, (req, res) => {
-    const db = getDB();
-    db.users = db.users.filter(u => u.id !== req.params.id);
-    saveDB(db);
-    res.json({ success: true });
-});
-
 app.delete('/api/admin/event/:id', checkAdmin, (req, res) => {
     const db = getDB();
     db.events = db.events.filter(e => e.id !== req.params.id);
@@ -138,30 +134,36 @@ app.delete('/api/admin/event/:id', checkAdmin, (req, res) => {
 });
 
 async function processTacticalText(text, source) {
-    if (!process.env.API_KEY) return null;
+    if (!process.env.API_KEY) {
+        console.error("Missing API_KEY in environment");
+        return null;
+    }
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     try {
+        const prompt = `TACTICAL INTEL REPORT: "${text}" (Source: ${source})
+        Task: Identify air threats in Ukraine. 
+        Note: If message mentions "тест" or "test", pick a major city like Odesa (46.48, 30.72) and create a shahed event.
+        Output EXACT format:
+        TYPE: [shahed|missile|kab]
+        REGION: [id] (odesa, kyiv, kharkiv, lviv, etc.)
+        LAT: [decimal_lat]
+        LNG: [decimal_lng]
+        DIR: [0-360]
+        CLEAR: [true|false]`;
+
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
-            contents: `Analyze this report for SkyWatch tactical interface: "${text}".
-            - Identify if it mentions air threats (shahed, missile, kab).
-            - If it's a test message (contains "тест", "test"), simulate a "shahed" detection near a major city like Odesa or Kyiv.
-            - Provide output in this EXACT format:
-            TYPE: [shahed|missile|kab]
-            REGION: [oblast_id_lowercase]
-            LAT: [latitude_decimal]
-            LNG: [longitude_decimal]
-            DIR: [heading_0_360]
-            CLEAR: [true|false]`,
+            contents: prompt,
             config: { 
               tools: [{ googleMaps: {} }],
-              systemInstruction: "You are a military tactical intelligence parser. Your goal is to map air threats onto coordinates. If coordinates are ambiguous, use a central point for the mentioned region. If it's a test, pick a visible location on the map of Ukraine."
+              systemInstruction: "You are a tactical military sensor. Your primary goal is to extract coordinates and threat types from text. Always provide coordinates for identified locations."
             }
         });
         
-        const raw = response.text;
-        // Fix regex to handle integers and decimals correctly
+        const raw = response.text || "";
+        console.log(`[AI RESPONSE]: ${raw.substring(0, 100)}...`);
+
         const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
         const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
         
@@ -174,16 +176,16 @@ async function processTacticalText(text, source) {
         const db = getDB();
         if (isClear && region) {
             db.events = db.events.filter(e => e.region !== region);
-            db.logs.unshift({ id: Date.now().toString(), text: `CLEARED: ${region}`, source, timestamp: Date.now() });
+            db.logs.unshift({ id: 'log_'+Date.now(), text: `CLEARED: ${region.toUpperCase()}`, source, timestamp: Date.now() });
             saveDB(db);
             return { cleared: true };
         }
         
         if (lat && lng) {
             const newEvent = { 
-                id: 'ev_' + Math.random().toString(36).substr(2, 9), 
+                id: 'ev_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5), 
                 type, 
-                region: region || 'sea', 
+                region: region || 'unknown', 
                 lat, 
                 lng, 
                 direction: parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1] || '180'), 
@@ -194,22 +196,25 @@ async function processTacticalText(text, source) {
                 speed: type === 'missile' ? 850 : 185 
             };
             db.events.push(newEvent);
-            db.logs.unshift({ id: Date.now().toString(), text: `DETECTION: ${type} @ ${region}`, source, timestamp: Date.now() });
+            db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECTED: ${type.toUpperCase()} @ ${region ? region.toUpperCase() : 'GRID'}`, source, timestamp: Date.now() });
             saveDB(db);
             return { event: newEvent };
         }
-    } catch (e) { console.error("AI Ingest Error:", e); }
+    } catch (e) { 
+        console.error("AI Processing Failure:", e.message); 
+    }
     return null;
 }
 
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) app.use(express.static(distPath));
 app.use(express.static(__dirname));
+
 app.get('*', (req, res) => {
-    if (req.path.startsWith('/api/')) return res.status(404).json({ error: "API Not Found" });
+    if (req.path.startsWith('/api/')) return res.status(404).json({ error: "API Route Not Found" });
     const target = fs.existsSync(path.join(distPath, 'index.html')) ? path.join(distPath, 'index.html') : path.join(__dirname, 'index.html');
     res.sendFile(target);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`[SERVER] Tactical Node active on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`[SERVER] SkyWatch Tactical Node online on port ${PORT}`));
