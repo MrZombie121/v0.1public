@@ -62,6 +62,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   const markersRef = useRef<{ [key: string]: L.Marker }>({});
   const geojsonLayerRef = useRef<L.GeoJSON | null>(null);
   const [ticker, setTicker] = useState(0);
+  const [gridStatus, setGridStatus] = useState<'syncing' | 'online' | 'offline'>('syncing');
 
   useEffect(() => {
     const interval = setInterval(() => setTicker(t => t + 1), 1000);
@@ -71,32 +72,49 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   const loadGeoJSON = async () => {
     for (const url of GEOJSON_SOURCES) {
       try {
-        const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
+        const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
         if (!response.ok) continue;
         const data = await response.json();
-        if (mapRef.current) {
-          if (geojsonLayerRef.current) mapRef.current.removeLayer(geojsonLayerRef.current);
-          geojsonLayerRef.current = L.geoJSON(data, {
-            style: { color: 'rgba(255, 255, 255, 0.1)', weight: 1, fillColor: 'transparent', fillOpacity: 0 }
-          }).addTo(mapRef.current);
-          return;
-        }
+        applyGeoData(data, 'online');
+        return;
       } catch (e) {}
     }
+    setGridStatus('offline');
+  };
+
+  const applyGeoData = (data: any, status: 'online' | 'offline') => {
+    if (!mapRef.current) return;
+    if (geojsonLayerRef.current) mapRef.current.removeLayer(geojsonLayerRef.current);
+    geojsonLayerRef.current = L.geoJSON(data, {
+      style: { color: 'rgba(255, 255, 255, 0.1)', weight: 1, fillColor: 'transparent', fillOpacity: 0 }
+    }).addTo(mapRef.current);
+    setGridStatus(status);
   };
 
   useEffect(() => {
     if (!mapContainerRef.current) return;
-    mapRef.current = L.map(mapContainerRef.current, {
+    
+    const map = L.map(mapContainerRef.current, {
       center: [48.3794, 31.1656],
       zoom: 6,
       zoomControl: false,
       maxBounds: UKRAINE_BOUNDS,
       attributionControl: false
     });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(mapRef.current);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+    mapRef.current = map;
+    
     loadGeoJSON();
-    return () => { mapRef.current?.remove(); };
+
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 500);
+
+    return () => { 
+      map.remove(); 
+      mapRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -106,7 +124,6 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
 
     events.forEach(e => activeRegions.set(e.region, e.isVerified ? TARGET_COLORS.REAL : TARGET_COLORS.TEST));
 
-    // Boundary Highlighting
     if (geojsonLayerRef.current) {
       geojsonLayerRef.current.eachLayer((layer: any) => {
         const p = layer.feature?.properties;
@@ -129,9 +146,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
       });
     }
 
-    // Precise Target Placement
     events.forEach(event => {
-      // Use AI-provided coordinates exclusively
       const lat = event.lat;
       const lng = event.lng;
       if (lat === undefined || lng === undefined) return;
@@ -169,12 +184,12 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   }, [events, ticker, onSelectEvent]);
 
   return (
-    <div className="relative w-full h-full">
-      <div ref={mapContainerRef} className="w-full h-full" />
+    <div className="relative w-full h-full min-h-[400px]">
+      <div ref={mapContainerRef} className="w-full h-full absolute inset-0 z-0" />
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1001] glass-panel px-4 py-1.5 rounded-full border border-white/10 flex items-center gap-3">
-         <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]" />
+         <div className={`w-2 h-2 rounded-full animate-pulse shadow-[0_0_8px] ${gridStatus === 'online' ? 'bg-emerald-500 shadow-emerald-500' : gridStatus === 'syncing' ? 'bg-amber-500 shadow-amber-500' : 'bg-rose-500 shadow-rose-500'}`} />
          <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">
-           Precise Geo-Targeting Active
+           {gridStatus === 'online' ? 'Map Service: Connected' : gridStatus === 'syncing' ? 'Loading Boundaries' : 'Map Service: GeoData Error'}
          </span>
       </div>
     </div>

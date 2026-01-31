@@ -1,0 +1,11 @@
+{
+  "events": [],
+  "logs": [],
+  "users": [],
+  "sources": [
+    { "id": "s1", "name": "vanek_nikolaev", "type": "telegram", "enabled": true },
+    { "id": "s2", "name": "kpszsu", "type": "telegram", "enabled": true },
+    { "id": "s3", "name": "war_monitor", "type": "telegram", "enabled": true },
+    { "id": "s4", "name": "oddesitmedia", "type": "telegram", "enabled": true }
+  ]
+}

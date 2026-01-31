@@ -5,14 +5,26 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// В Railway внутри контейнера сервер доступен по localhost или 0.0.0.0
 const PORT = process.env.PORT || 3000;
-const BACKEND_URL = `http://localhost:${PORT}/api/ingest`;
+const BASE_URL = `http://localhost:${PORT}`;
+const BACKEND_URL = `${BASE_URL}/api/ingest`;
+const SOURCES_URL = `${BASE_URL}/api/sources`;
 
-const CHANNELS = ["vanek_nikolaev", "kpszsu", "monitor_ua_1", "oddesitmedia"];
-const POLL_INTERVAL = 60000; // 1 минута
-
+const POLL_INTERVAL = 60000; 
 const lastSeenIds = {};
+let activeChannels = [];
+
+async function updateSources() {
+    try {
+        const { data } = await axios.get(SOURCES_URL);
+        activeChannels = data
+            .filter(s => s.enabled && s.type === 'telegram')
+            .map(s => s.name);
+        console.log(`[SCRAPER] Updated sources: ${activeChannels.join(', ')}`);
+    } catch (e) {
+        console.error("[SCRAPER] Failed to fetch sources list:", e.message);
+    }
+}
 
 async function scrapeChannel(channel) {
     try {
@@ -25,7 +37,6 @@ async function scrapeChannel(channel) {
 
         const $ = cheerio.load(data);
         const lastMessageWrap = $('.tgme_widget_message_wrap').last();
-        
         if (!lastMessageWrap.length) return;
 
         const messageBlock = lastMessageWrap.find('.tgme_widget_message');
@@ -34,12 +45,10 @@ async function scrapeChannel(channel) {
 
         if (messageId && text && lastSeenIds[channel] !== messageId) {
             console.log(`[SCRAPER] @${channel}: New intel detected (${messageId})`);
-
             await axios.post(BACKEND_URL, {
                 text: text,
                 source: `TG_Web_@${channel}`
             }).catch(e => console.error("Failed to forward to backend:", e.message));
-
             lastSeenIds[channel] = messageId;
         }
     } catch (error) {
@@ -49,21 +58,24 @@ async function scrapeChannel(channel) {
 
 async function run() {
     console.log("------------------------------------------");
-    console.log("   SkyWatch Intel Scraper: ONLINE        ");
+    console.log("   SkyWatch Dynamic Scraper: ONLINE      ");
     console.log("------------------------------------------");
 
-    // Начальный проход
-    for (const channel of CHANNELS) {
+    await updateSources();
+
+    setInterval(async () => {
+        await updateSources();
+        for (const channel of activeChannels) {
+            await scrapeChannel(channel);
+            await new Promise(r => setTimeout(r, 3000));
+        }
+    }, POLL_INTERVAL);
+    
+    // Initial run
+    for (const channel of activeChannels) {
         await scrapeChannel(channel);
         await new Promise(r => setTimeout(r, 2000));
     }
-
-    setInterval(async () => {
-        for (const channel of CHANNELS) {
-            await scrapeChannel(channel);
-            await new Promise(r => setTimeout(r, 2000));
-        }
-    }, POLL_INTERVAL);
 }
 
 run();

@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Loader2, Terminal, Info, Zap } from 'lucide-react';
+import { Loader2, Terminal, Info, Zap, ChevronRight } from 'lucide-react';
 
 interface TelegramFeedProps {
   onMessageProcessed: () => void;
@@ -9,29 +9,33 @@ interface TelegramFeedProps {
 const TelegramFeed: React.FC<TelegramFeedProps> = ({ onMessageProcessed }) => {
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [lastStatus, setLastStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   const handleSend = async () => {
     if (!input.trim() || isProcessing) return;
 
     setIsProcessing(true);
+    setLastStatus('idle');
     try {
-      // Отправляем сырой текст на наш сервер
-      const API_URL = window.location.port === '5173' ? 'http://localhost:3000' : '';
+      const isDev = window.location.port === '5173';
+      const API_URL = isDev ? 'http://localhost:3000' : '';
+      
       const response = await fetch(`${API_URL}/api/ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: input, source: 'Manual_Console' })
+        body: JSON.stringify({ text: input, source: 'Direct_Command' })
       });
 
       if (response.ok) {
+        setLastStatus('success');
         onMessageProcessed();
         setInput('');
+        setTimeout(() => setLastStatus('idle'), 3000);
       } else {
-        const err = await response.json();
-        console.error("Server error:", err);
+        setLastStatus('error');
       }
     } catch (err) {
-      console.error("Network error:", err);
+      setLastStatus('error');
     } finally {
       setIsProcessing(false);
     }
@@ -39,38 +43,40 @@ const TelegramFeed: React.FC<TelegramFeedProps> = ({ onMessageProcessed }) => {
 
   return (
     <div className="w-full">
-      <div className="glass-panel rounded-xl overflow-hidden border-t border-white/10 relative">
-        <div className="flex items-center gap-3 bg-black/40 px-4 py-2 border-b border-white/5">
-          <Terminal size={12} className="text-sky-500" />
-          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Tactical Injection Terminal</span>
-          <div className="ml-auto flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-[8px] font-bold text-emerald-500/70">SECURE LINK ACTIVE</span>
+      <div className="glass-panel rounded-2xl overflow-hidden border border-white/10 relative shadow-2xl">
+        <div className="flex items-center gap-3 bg-white/5 px-4 py-3 border-b border-white/5">
+          <Terminal size={14} className="text-sky-500" />
+          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Tactical Injection Terminal</span>
+          <div className="ml-auto flex items-center gap-3">
+             {lastStatus === 'success' && <span className="text-[8px] font-bold text-emerald-500 animate-pulse">INTEL INGESTED</span>}
+             {lastStatus === 'error' && <span className="text-[8px] font-bold text-rose-500 animate-pulse">SYSTEM ERROR</span>}
+             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
           </div>
         </div>
 
-        <div className="p-3 relative">
+        <div className="p-4 flex items-center gap-3">
+          <ChevronRight size={14} className="text-slate-600" />
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
             placeholder="Введіть тактичні дані (напр: 'Шахеди з моря на Одесу')..."
-            className="w-full bg-transparent border-none text-slate-200 text-xs font-medium placeholder:text-slate-600 outline-none py-1 pr-10"
+            className="flex-1 bg-transparent border-none text-slate-200 text-sm font-medium placeholder:text-slate-600 outline-none"
           />
           <button
             onClick={handleSend}
             disabled={isProcessing || !input.trim()}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-sky-500 hover:text-sky-300 disabled:text-slate-700 transition-colors"
+            className={`p-2 rounded-xl transition-all ${isProcessing ? 'bg-sky-500/20 text-sky-500' : 'bg-sky-500 text-white hover:bg-sky-400 shadow-lg shadow-sky-500/20'} disabled:opacity-20`}
           >
-            {isProcessing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+            {isProcessing ? <Loader2 size={18} className="animate-spin" /> : <Zap size={18} />}
           </button>
         </div>
       </div>
-      <div className="mt-2 flex justify-center gap-4">
-        <div className="flex items-center gap-1.5">
+      <div className="mt-2 flex justify-center">
+        <div className="flex items-center gap-2">
           <Info size={10} className="text-slate-600" />
-          <span className="text-[8px] font-bold text-slate-600 uppercase">Input is processed by Cloud AI node</span>
+          <span className="text-[8px] font-bold text-slate-600 uppercase tracking-widest">AI Grounding via Google Maps Active</span>
         </div>
       </div>
     </div>
