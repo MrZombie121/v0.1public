@@ -7,7 +7,7 @@ dotenv.config();
 
 // Detect environment or default to local
 const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`;
+const BASE_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 const BACKEND_URL = `${BASE_URL}/api/ingest`;
 const SOURCES_URL = `${BASE_URL}/api/sources`;
 
