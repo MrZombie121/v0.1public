@@ -93,6 +93,87 @@ function checkAdmin(req, res, next) {
     } catch (e) { res.status(403).json({ error: "Invalid token" }); }
 }
 
+// --- AUTH ENDPOINTS ---
+app.post('/api/auth/register', (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ success: false, message: "Missing credentials" });
+
+    const db = getDB();
+    if (db.users.find(u => u.email === email)) {
+        return res.status(400).json({ success: false, message: "User already exists" });
+    }
+
+    const isFirstUser = db.users.length === 0;
+    const newUser = {
+        id: 'user_' + Date.now(),
+        email,
+        password,
+        role: isFirstUser ? 'admin' : 'user'
+    };
+
+    db.users.push(newUser);
+    saveDB(db);
+
+    const token = Buffer.from(`${email}:${password}`).toString('base64');
+    res.json({ success: true, user: { email, role: newUser.role }, token });
+});
+
+app.post('/api/auth/login', (req, res) => {
+    const { email, password } = req.body;
+    const db = getDB();
+    const user = db.users.find(u => u.email === email && u.password === password);
+
+    if (!user) return res.status(401).json({ success: false, message: "Invalid credentials" });
+
+    const token = Buffer.from(`${email}:${password}`).toString('base64');
+    res.json({ success: true, user: { email, role: user.role }, token });
+});
+
+// --- ADMIN ENDPOINTS ---
+app.get('/api/admin/users', checkAdmin, (req, res) => {
+    const db = getDB();
+    const safeUsers = db.users.map(({ id, email, role }) => ({ id, email, role }));
+    res.json(safeUsers);
+});
+
+app.patch('/api/admin/users/:id/role', checkAdmin, (req, res) => {
+    const { id } = req.params;
+    const { role } = req.body;
+    const db = getDB();
+    const user = db.users.find(u => u.id === id);
+    if (user) {
+        user.role = role;
+        saveDB(db);
+        res.json({ success: true });
+    } else res.status(404).json({ error: "User not found" });
+});
+
+app.post('/api/admin/sources', checkAdmin, (req, res) => {
+    const { name, type } = req.body;
+    const db = getDB();
+    const newSource = { id: 's_' + Date.now(), name, type, enabled: true };
+    db.sources.push(newSource);
+    saveDB(db);
+    res.json({ success: true });
+});
+
+app.delete('/api/admin/sources/:id', checkAdmin, (req, res) => {
+    const { id } = req.params;
+    const db = getDB();
+    db.sources = db.sources.filter(s => s.id !== id);
+    saveDB(db);
+    res.json({ success: true });
+});
+
+app.delete('/api/admin/event/:id', checkAdmin, (req, res) => {
+    const { id } = req.params;
+    const db = getDB();
+    db.events = db.events.filter(e => e.id !== id);
+    saveDB(db);
+    res.json({ success: true });
+});
+
+// --- PUBLIC DATA ENDPOINTS ---
 app.get('/api/sources', (req, res) => {
     const db = getDB();
     res.json(db.sources || []);
@@ -102,10 +183,8 @@ app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
     if (!text) return res.status(400).json({ error: "Empty text" });
 
-    // Если это тестовый сигнал, проверяем права администратора
     const isTest = text.toLowerCase().includes('тест') || text.toLowerCase().includes('test');
     if (isTest) {
-        // Мы вызываем проверку вручную или через middleware
         const token = req.headers['auth-token'];
         if (!token) return res.status(403).json({ error: "Admin token required for test signals" });
         
@@ -117,7 +196,6 @@ app.post('/api/ingest', async (req, res) => {
                 return res.status(403).json({ error: "Only admins can spawn test signals" });
             }
             
-            // Если админ - спавним тест
             const testEvent = {
                 id: 'ev_test_' + Date.now(),
                 type: 'shahed',
@@ -140,7 +218,6 @@ app.post('/api/ingest', async (req, res) => {
         }
     }
 
-    // Если это не тест - обрабатываем через ИИ
     const result = await processTacticalText(text, source);
     if (result) {
         res.json({ success: true, ...result });
