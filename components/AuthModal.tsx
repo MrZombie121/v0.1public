@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Lock, ShieldCheck, AlertCircle, Loader2, ArrowRight, UserPlus, LogIn } from 'lucide-react';
+import { Lock, ShieldCheck, AlertCircle, Loader2, ArrowRight, UserPlus, LogIn, Key } from 'lucide-react';
 
 interface AuthModalProps {
   isFirstTime: boolean;
@@ -15,7 +15,6 @@ const AuthModal: React.FC<AuthModalProps> = ({ isFirstTime, onSuccess, onClose }
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // Sync state if prop changes
   useEffect(() => {
     setIsRegistering(isFirstTime);
   }, [isFirstTime]);
@@ -54,19 +53,23 @@ const AuthModal: React.FC<AuthModalProps> = ({ isFirstTime, onSuccess, onClose }
   return (
     <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-black/95 backdrop-blur-xl p-4">
       <div className="glass-panel w-full max-w-md p-8 rounded-[2rem] border border-white/10 shadow-[0_0_100px_rgba(0,0,0,1)] relative overflow-hidden">
-        <div className="absolute -top-24 -left-24 w-48 h-48 bg-sky-500/10 blur-[80px] rounded-full" />
+        <div className={`absolute -top-24 -left-24 w-48 h-48 blur-[80px] rounded-full ${isFirstTime ? 'bg-amber-500/10' : 'bg-sky-500/10'}`} />
         
         <div className="relative">
           <div className="flex flex-col items-center mb-8 text-center">
-            <div className={`p-4 rounded-2xl mb-4 transition-colors ${isRegistering ? 'bg-emerald-500/20 text-emerald-400' : 'bg-sky-500/20 text-sky-400'}`}>
-              {isRegistering ? <UserPlus size={32} /> : <LogIn size={32} />}
+            <div className={`p-4 rounded-2xl mb-4 transition-colors ${
+              isFirstTime ? 'bg-amber-500/20 text-amber-400' : 
+              isRegistering ? 'bg-emerald-500/20 text-emerald-400' : 
+              'bg-sky-500/20 text-sky-400'
+            }`}>
+              {isFirstTime ? <Key size={32} /> : isRegistering ? <UserPlus size={32} /> : <LogIn size={32} />}
             </div>
             <h2 className="text-xl font-black uppercase tracking-[0.2em] text-white">
-              {isFirstTime ? 'Master Node Access' : isRegistering ? 'New Operator' : 'Security Clearance'}
+              {isFirstTime ? 'Establish Ownership' : isRegistering ? 'New Operator' : 'Security Clearance'}
             </h2>
             <p className="text-[10px] text-slate-500 font-bold uppercase mt-2 tracking-widest leading-relaxed">
               {isFirstTime 
-                ? 'Create the primary administrative credential' 
+                ? 'Create the primary system owner credential' 
                 : 'Authentication required for tactical command'}
             </p>
           </div>
@@ -102,16 +105,16 @@ const AuthModal: React.FC<AuthModalProps> = ({ isFirstTime, onSuccess, onClose }
               type="submit" 
               disabled={isLoading}
               className={`w-full font-black uppercase tracking-[0.3em] py-4 rounded-2xl transition-all flex items-center justify-center gap-3 active:scale-[0.98] ${
-                isRegistering 
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20' 
-                : 'bg-sky-600 hover:bg-sky-500 text-white shadow-lg shadow-sky-600/20'
+                isFirstTime ? 'bg-amber-600 hover:bg-amber-500 text-white' :
+                isRegistering ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20' : 
+                'bg-sky-600 hover:bg-sky-500 text-white shadow-lg shadow-sky-600/20'
               } disabled:opacity-50 disabled:active:scale-100`}
             >
               {isLoading ? (
                 <Loader2 size={18} className="animate-spin" />
               ) : (
                 <>
-                  {isRegistering ? 'Register Node' : 'Initialize Session'}
+                  {isFirstTime ? 'Initialize Owner Node' : isRegistering ? 'Register Node' : 'Initialize Session'}
                   <ArrowRight size={18} />
                 </>
               )}

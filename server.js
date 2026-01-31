@@ -45,8 +45,7 @@ const DEFAULT_SOURCES = [
     { id: "s1", name: "vanek_nikolaev", type: "telegram", enabled: true },
     { id: "s2", name: "kpszsu", type: "telegram", enabled: true },
     { id: "s3", name: "war_monitor", type: "telegram", enabled: true },
-    { id: "s4", name: "odecit", type: "telegram", enabled: true },
-    { id: "s5", name: "oddesitmedia", type: "telegram", enabled: true }
+    { id: "s4", name: "oddesitmedia", type: "telegram", enabled: true }
 ];
 
 const getDB = () => {
@@ -57,10 +56,6 @@ const getDB = () => {
             return initial;
         }
         const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
-        if (!data.sources || data.sources.length === 0) {
-            data.sources = DEFAULT_SOURCES;
-            saveDB(data);
-        }
         return data;
     } catch (e) {
         return { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
@@ -81,15 +76,27 @@ app.use(cors());
 app.use(express.json());
 
 // --- AUTH MIDDLEWARE ---
-function checkAdmin(req, res, next) {
+function checkPrivileged(req, res, next) {
     const token = req.headers['auth-token'];
-    if (!token) return res.status(403).json({ error: "Access Denied. Admin token required." });
+    if (!token) return res.status(403).json({ error: "Unauthorized" });
     try {
         const [email, password] = Buffer.from(token, 'base64').toString().split(':');
         const db = getDB();
         const user = db.users.find(u => u.email === email && u.password === password);
-        if (user && user.role === 'admin') next();
-        else res.status(403).json({ error: "Admin access required" });
+        if (user && (user.role === 'admin' || user.role === 'owner')) next();
+        else res.status(403).json({ error: "Access Denied" });
+    } catch (e) { res.status(403).json({ error: "Invalid token" }); }
+}
+
+function checkOwner(req, res, next) {
+    const token = req.headers['auth-token'];
+    if (!token) return res.status(403).json({ error: "Unauthorized" });
+    try {
+        const [email, password] = Buffer.from(token, 'base64').toString().split(':');
+        const db = getDB();
+        const user = db.users.find(u => u.email === email && u.password === password);
+        if (user && user.role === 'owner') next();
+        else res.status(403).json({ error: "Owner access required" });
     } catch (e) { res.status(403).json({ error: "Invalid token" }); }
 }
 
@@ -100,7 +107,7 @@ app.post('/api/auth/register', (req, res) => {
 
     const db = getDB();
     if (db.users.find(u => u.email === email)) {
-        return res.status(400).json({ success: false, message: "User already exists" });
+        return res.status(400).json({ success: false, message: "Operator already exists" });
     }
 
     const isFirstUser = db.users.length === 0;
@@ -108,7 +115,7 @@ app.post('/api/auth/register', (req, res) => {
         id: 'user_' + Date.now(),
         email,
         password,
-        role: isFirstUser ? 'admin' : 'user'
+        role: isFirstUser ? 'owner' : 'user'
     };
 
     db.users.push(newUser);
@@ -129,14 +136,23 @@ app.post('/api/auth/login', (req, res) => {
     res.json({ success: true, user: { email, role: user.role }, token });
 });
 
-// --- ADMIN ENDPOINTS ---
-app.get('/api/admin/users', checkAdmin, (req, res) => {
+// --- ADMIN/OWNER ENDPOINTS ---
+app.get('/api/admin/users', checkPrivileged, (req, res) => {
     const db = getDB();
     const safeUsers = db.users.map(({ id, email, role }) => ({ id, email, role }));
     res.json(safeUsers);
 });
 
-app.patch('/api/admin/users/:id/role', checkAdmin, (req, res) => {
+app.post('/api/admin/system-reset', checkOwner, (req, res) => {
+    const initial = { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
+    if (saveDB(initial)) {
+        res.json({ success: true, message: "System wiped" });
+    } else {
+        res.status(500).json({ error: "Reset failed" });
+    }
+});
+
+app.patch('/api/admin/users/:id/role', checkOwner, (req, res) => {
     const { id } = req.params;
     const { role } = req.body;
     const db = getDB();
@@ -148,7 +164,7 @@ app.patch('/api/admin/users/:id/role', checkAdmin, (req, res) => {
     } else res.status(404).json({ error: "User not found" });
 });
 
-app.post('/api/admin/sources', checkAdmin, (req, res) => {
+app.post('/api/admin/sources', checkPrivileged, (req, res) => {
     const { name, type } = req.body;
     const db = getDB();
     const newSource = { id: 's_' + Date.now(), name, type, enabled: true };
@@ -157,7 +173,7 @@ app.post('/api/admin/sources', checkAdmin, (req, res) => {
     res.json({ success: true });
 });
 
-app.delete('/api/admin/sources/:id', checkAdmin, (req, res) => {
+app.delete('/api/admin/sources/:id', checkPrivileged, (req, res) => {
     const { id } = req.params;
     const db = getDB();
     db.sources = db.sources.filter(s => s.id !== id);
@@ -165,12 +181,20 @@ app.delete('/api/admin/sources/:id', checkAdmin, (req, res) => {
     res.json({ success: true });
 });
 
-app.delete('/api/admin/event/:id', checkAdmin, (req, res) => {
+app.delete('/api/admin/event/:id', checkPrivileged, (req, res) => {
     const { id } = req.params;
     const db = getDB();
     db.events = db.events.filter(e => e.id !== id);
     saveDB(db);
     res.json({ success: true });
+});
+
+// Batch delete all test events
+app.delete('/api/admin/events/tests', checkPrivileged, (req, res) => {
+    const db = getDB();
+    db.events = db.events.filter(e => e.isVerified !== false);
+    saveDB(db);
+    res.json({ success: true, message: "All test signals purged" });
 });
 
 // --- PUBLIC DATA ENDPOINTS ---
@@ -179,138 +203,83 @@ app.get('/api/sources', (req, res) => {
     res.json(db.sources || []);
 });
 
+app.get('/api/events', (req, res) => {
+    const db = getDB();
+    const now = Date.now();
+    const validEvents = (db.events || []).filter(e => now - e.timestamp < 3600000);
+    res.json({ 
+        events: validEvents, 
+        logs: (db.logs || []).slice(0, 50), 
+        systemInitialized: (db.users || []).length > 0 
+    });
+});
+
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
     if (!text) return res.status(400).json({ error: "Empty text" });
-
-    const isTest = text.toLowerCase().includes('тест') || text.toLowerCase().includes('test');
-    if (isTest) {
-        const token = req.headers['auth-token'];
-        if (!token) return res.status(403).json({ error: "Admin token required for test signals" });
-        
-        try {
-            const [email, password] = Buffer.from(token, 'base64').toString().split(':');
-            const db = getDB();
-            const user = db.users.find(u => u.email === email && u.password === password);
-            if (!user || user.role !== 'admin') {
-                return res.status(403).json({ error: "Only admins can spawn test signals" });
-            }
-            
-            const testEvent = {
-                id: 'ev_test_' + Date.now(),
-                type: 'shahed',
-                region: 'odesa',
-                lat: 46.48,
-                lng: 30.72,
-                direction: 180,
-                timestamp: Date.now(),
-                source: source || 'MANUAL',
-                rawText: text,
-                isVerified: false,
-                speed: 180
-            };
-            db.events.push(testEvent);
-            db.logs.unshift({ id: 'log_' + Date.now(), text: `TEST SIGNAL: ODESA`, source, timestamp: Date.now() });
-            saveDB(db);
-            return res.json({ success: true, event: testEvent });
-        } catch (e) {
-            return res.status(403).json({ error: "Authentication failed" });
-        }
-    }
 
     const result = await processTacticalText(text, source);
     if (result) {
         res.json({ success: true, ...result });
     } else {
-        res.status(422).json({ success: false, message: "Failed to parse tactical data" });
+        res.status(422).json({ success: false, message: "Failed to parse" });
     }
-});
-
-app.get('/api/events', (req, res) => {
-    const db = getDB();
-    const now = Date.now();
-    const validEvents = (db.events || []).filter(e => now - e.timestamp < 3600000);
-    res.json({ events: validEvents, logs: (db.logs || []).slice(0, 50), systemInitialized: (db.users || []).length > 0 });
 });
 
 async function processTacticalText(text, source) {
-    if (!process.env.API_KEY) {
-        console.error("[CRITICAL] API_KEY not set in environment");
-        return null;
-    }
-    
+    if (!process.env.API_KEY) return null;
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.5-flash-latest",
-            contents: `Identify air threats in Ukraine from this text: "${text}".
-            Required fields:
-            TYPE: [shahed|missile|kab]
-            REGION: [id] (e.g. odesa, kyiv, lviv)
-            LAT: [decimal_latitude]
-            LNG: [decimal_longitude]
-            DIR: [0-360]
-            CLEAR: [true|false]
-            
-            Use Google Maps tool to find coordinates of mentioned cities or regions.`,
-            config: { 
-                tools: [{ googleMaps: {} }],
-                systemInstruction: "You are a military intel extraction bot. Provide coordinates for every detection. If multiple cities mentioned, use the first one." 
-            }
+            contents: `Analyze: "${text}". Identify air threats. 
+            Format: TYPE:[shahed|missile|kab] REGION:[id] LAT:[lat] LNG:[lng] DIR:[0-360]`,
+            config: { tools: [{ googleMaps: {} }] }
         });
         
-        let raw = response.text || "";
-        raw = raw.replace(/```[a-z]*\n/g, '').replace(/```/g, '');
-        
-        console.log(`[AI RESPONSE RAW]: ${raw.trim()}`);
-
+        const raw = response.text || "";
         const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
         const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
         const regionMatch = raw.match(/REGION:\s*([a-z_]+)/i);
-        const dirMatch = raw.match(/DIR:\s*(\d+)/i);
         const typeMatch = raw.match(/TYPE:\s*(shahed|missile|kab)/i);
-        
-        let region = regionMatch ? regionMatch[1].toLowerCase() : 'grid';
+        const dirMatch = raw.match(/DIR:\s*(\d+)/i);
+
         let lat = latMatch ? parseFloat(latMatch[1]) : null;
         let lng = lngMatch ? parseFloat(lngMatch[1]) : null;
-        let direction = dirMatch ? parseInt(dirMatch[1]) : 180;
-        let type = typeMatch ? typeMatch[1].toLowerCase() : 'shahed';
-        
+        let region = regionMatch ? regionMatch[1].toLowerCase() : 'grid';
+
         if ((!lat || !lng) && REGION_COORDS[region]) {
             lat = REGION_COORDS[region].lat;
             lng = REGION_COORDS[region].lng;
-            console.log(`[FALLBACK] Used regional coords for ${region}`);
         }
 
         if (lat && lng) {
             const db = getDB();
             const newEvent = { 
-                id: 'ev_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4), 
-                type, region, lat, lng, direction, 
-                timestamp: Date.now(), source, rawText: text, isVerified: true, 
-                speed: type === 'missile' ? 850 : 185 
+                id: 'ev_' + Date.now(),
+                type: (typeMatch ? typeMatch[1].toLowerCase() : 'shahed'),
+                region, lat, lng, 
+                direction: (dirMatch ? parseInt(dirMatch[1]) : 180),
+                timestamp: Date.now(), 
+                source, rawText: text, isVerified: !text.toLowerCase().includes('тест'), 
+                speed: (raw.includes('missile') ? 850 : 185)
             };
             db.events.push(newEvent);
-            db.logs.unshift({ id: 'log_'+Date.now(), text: `CONTACT: ${type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
+            db.logs.unshift({ id: 'log_'+Date.now(), text: `CONTACT: ${newEvent.type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
             saveDB(db);
             return { event: newEvent };
         }
-    } catch (e) { 
-        console.error("[AI ERROR]:", e.message); 
-    }
+    } catch (e) { console.error(e); }
     return null;
 }
 
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) app.use(express.static(distPath));
 app.use(express.static(__dirname));
-
 app.get('*', (req, res) => {
     if (req.path.startsWith('/api/')) return res.status(404).send("404");
-    const target = fs.existsSync(path.join(distPath, 'index.html')) ? path.join(distPath, 'index.html') : path.join(__dirname, 'index.html');
-    res.sendFile(target);
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`[SYSTEM] Tactical Grid active on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Tactical Node Active on ${PORT}`));

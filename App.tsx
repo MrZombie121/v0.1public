@@ -10,7 +10,7 @@ import { ShieldCheck, Activity, Loader2, AlertCircle, X, Settings, Lock, LogOut 
 
 interface User {
   email: string;
-  role: 'admin' | 'user';
+  role: 'owner' | 'admin' | 'user';
 }
 
 interface Source {
@@ -114,6 +114,8 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [refreshData]);
 
+  const canAccessAdmin = user?.role === 'admin' || user?.role === 'owner';
+
   if (isInitialLoading) {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center bg-[#020617] text-slate-400 font-mono">
@@ -158,7 +160,7 @@ const App: React.FC = () => {
             )}
           </div>
           
-          {user?.role === 'admin' && (
+          {canAccessAdmin && (
             <button 
               onClick={forceTest} 
               className="w-full py-2 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 rounded-xl text-[9px] font-black text-emerald-400 hover:text-emerald-300 uppercase transition-all tracking-widest shadow-lg shadow-emerald-500/5"
@@ -175,16 +177,22 @@ const App: React.FC = () => {
             <div className="glass-panel px-5 py-2.5 rounded-full border border-white/10 flex items-center gap-4">
               <div className="flex flex-col leading-none">
                 <span className="text-xs text-white font-black">{user.email}</span>
-                <span className="text-[8px] text-slate-500 font-black uppercase mt-0.5 tracking-widest">{user.role}</span>
+                <span className={`text-[8px] font-black uppercase mt-0.5 tracking-widest ${user.role === 'owner' ? 'text-amber-500' : 'text-slate-500'}`}>
+                  {user.role}
+                </span>
               </div>
               <button onClick={logout} className="p-2 text-rose-500/70 hover:text-rose-500"><LogOut size={16} /></button>
             </div>
-            {user.role === 'admin' && (
-              <button onClick={() => setShowAdmin(true)} className="bg-sky-600 p-3.5 rounded-full text-white shadow-xl"><Settings size={22} /></button>
+            {canAccessAdmin && (
+              <button onClick={() => setShowAdmin(true)} className="bg-sky-600 p-3.5 rounded-full text-white shadow-xl hover:bg-sky-500 transition-colors">
+                <Settings size={22} />
+              </button>
             )}
           </div>
         ) : (
-          <button onClick={() => setShowAuth(true)} className="glass-panel p-4 rounded-full text-slate-400 hover:text-white"><Lock size={22} /></button>
+          <button onClick={() => setShowAuth(true)} className="glass-panel p-4 rounded-full text-slate-400 hover:text-white transition-all">
+            <Lock size={22} />
+          </button>
         )}
       </div>
 
@@ -198,8 +206,13 @@ const App: React.FC = () => {
         />
       )}
 
-      {showAdmin && user?.role === 'admin' && (
-        <AdminDashboard events={events} onDelete={deleteEvent} onClose={() => setShowAdmin(false)} />
+      {showAdmin && canAccessAdmin && (
+        <AdminDashboard 
+          currentUserRole={user?.role || 'user'}
+          events={events} 
+          onDelete={deleteEvent} 
+          onClose={() => setShowAdmin(false)} 
+        />
       )}
 
       <div className="absolute top-8 left-8 z-[1002]">

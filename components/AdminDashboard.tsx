@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { AirEvent } from '../types';
-import { Trash2, ShieldAlert, X, Database, Users, Shield, ShieldOff, Radio, Plus, Link } from 'lucide-react';
+import { Trash2, ShieldAlert, X, Database, Users, Shield, ShieldOff, Radio, Plus, Link, Bomb, AlertTriangle, RefreshCw, Key, Eraser } from 'lucide-react';
 
 interface AdminDashboardProps {
+  currentUserRole: string;
   events: AirEvent[];
   onDelete: (id: string) => void;
   onClose: () => void;
@@ -12,7 +13,7 @@ interface AdminDashboardProps {
 interface UserRecord {
   id: string;
   email: string;
-  role: 'admin' | 'user';
+  role: 'owner' | 'admin' | 'user';
 }
 
 interface SourceRecord {
@@ -22,11 +23,17 @@ interface SourceRecord {
   enabled: boolean;
 }
 
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ events, onDelete, onClose }) => {
+const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events, onDelete, onClose }) => {
   const [activeTab, setActiveTab] = useState<'events' | 'personnel' | 'sources'>('events');
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [sources, setSources] = useState<SourceRecord[]>([]);
   const [newSourceName, setNewSourceName] = useState('');
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [isPurgingTests, setIsPurgingTests] = useState(false);
+
+  const isOwner = currentUserRole === 'owner';
+  const hasTests = events.some(e => e.isVerified === false || e.rawText?.toLowerCase().includes('тест'));
 
   const getApiUrl = (path: string) => {
     const isDev = window.location.port === '5173' || window.location.port === '5174';
@@ -73,7 +80,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ events, onDelete, onClo
     } catch (e) { console.error(e); }
   };
 
+  const purgeTests = async () => {
+    if (isPurgingTests) return;
+    setIsPurgingTests(true);
+    const token = localStorage.getItem('skywatch_token');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/events/tests'), {
+        method: 'DELETE',
+        headers: { 'auth-token': token || '' }
+      });
+      if (res.ok) {
+        // Events will be refreshed by the parent App component's interval
+        // but we can trigger a manual check if needed by providing a callback.
+        // For now, it will disappear on next poll.
+      }
+    } catch (e) { console.error(e); }
+    setIsPurgingTests(false);
+  };
+
   const updateRole = async (userId: string, newRole: string) => {
+    if (!isOwner) return;
     const token = localStorage.getItem('skywatch_token');
     try {
       await fetch(getApiUrl(`/api/admin/users/${userId}/role`), {
@@ -85,6 +111,32 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ events, onDelete, onClo
     } catch (e) { console.error(e); }
   };
 
+  const handleSystemReset = async () => {
+    if (!isOwner) return;
+    if (!resetConfirm) {
+      setResetConfirm(true);
+      return;
+    }
+
+    setIsResetting(true);
+    const token = localStorage.getItem('skywatch_token');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/system-reset'), {
+        method: 'POST',
+        headers: { 'auth-token': token || '' }
+      });
+      if (res.ok) {
+        localStorage.removeItem('skywatch_user');
+        localStorage.removeItem('skywatch_token');
+        window.location.reload();
+      }
+    } catch (e) {
+      console.error(e);
+      setIsResetting(false);
+      setResetConfirm(false);
+    }
+  };
+
   useEffect(() => { fetchData(); }, [activeTab]);
 
   return (
@@ -92,7 +144,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ events, onDelete, onClo
       <div className="glass-panel w-full max-w-4xl h-[80vh] rounded-3xl overflow-hidden flex flex-col border border-white/10 shadow-2xl">
         <div className="flex items-center justify-between p-6 bg-white/5 border-b border-white/5">
           <div className="flex items-center gap-4">
-            <div className="p-3 bg-sky-500/20 rounded-xl"><ShieldAlert size={24} className="text-sky-400" /></div>
+            <div className={`p-3 rounded-xl ${isOwner ? 'bg-amber-500/20' : 'bg-sky-500/20'}`}>
+              {isOwner ? <Key size={24} className="text-amber-400" /> : <ShieldAlert size={24} className="text-sky-400" />}
+            </div>
             <div>
               <h2 className="text-xl font-black uppercase tracking-widest text-white">Command Center</h2>
               <div className="flex gap-4 mt-2">
@@ -107,29 +161,116 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ events, onDelete, onClo
 
         <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
           {activeTab === 'events' && (
-            <table className="w-full text-left text-xs">
-              <thead className="text-slate-500 uppercase font-black tracking-widest border-b border-white/5">
-                <tr><th className="pb-4">Asset</th><th className="pb-4">Location</th><th className="pb-4">Source</th><th className="pb-4 text-right">Actions</th></tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {events.map(e => (
-                  <tr key={e.id} className="hover:bg-white/5"><td className="py-4"><div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${e.type === 'missile' ? 'bg-rose-500' : 'bg-sky-400'}`} /><span className="font-black uppercase">{e.type}</span></div></td><td className="py-4 text-emerald-400 font-bold">{e.region}</td><td className="py-4 text-slate-400 italic">@{e.source}</td><td className="py-4 text-right"><button onClick={() => onDelete(e.id)} className="p-2 text-rose-500/50 hover:text-rose-500"><Trash2 size={16} /></button></td></tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="space-y-4">
+              {hasTests && (
+                <div className="flex justify-end">
+                  <button 
+                    onClick={purgeTests}
+                    disabled={isPurgingTests}
+                    className="flex items-center gap-2 px-4 py-2 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 rounded-xl text-[10px] font-black text-sky-400 uppercase tracking-widest transition-all group"
+                  >
+                    {isPurgingTests ? <RefreshCw size={14} className="animate-spin" /> : <Eraser size={14} className="group-hover:rotate-12 transition-transform" />}
+                    Purge Test Data
+                  </button>
+                </div>
+              )}
+              <table className="w-full text-left text-xs">
+                <thead className="text-slate-500 uppercase font-black tracking-widest border-b border-white/5">
+                  <tr><th className="pb-4">Asset</th><th className="pb-4">Location</th><th className="pb-4">Source</th><th className="pb-4 text-right">Actions</th></tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {events.map(e => (
+                    <tr key={e.id} className="hover:bg-white/5">
+                      <td className="py-4">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${(!e.isVerified || e.rawText?.toLowerCase().includes('тест')) ? 'bg-sky-400 animate-pulse' : (e.type === 'missile' ? 'bg-rose-500' : 'bg-rose-400')}`} />
+                          <span className="font-black uppercase">{e.type}</span>
+                          {(!e.isVerified || e.rawText?.toLowerCase().includes('тест')) && <span className="text-[8px] font-bold text-sky-500 px-1.5 py-0.5 bg-sky-500/10 rounded uppercase tracking-tighter ml-1">Test</span>}
+                        </div>
+                      </td>
+                      <td className="py-4 text-emerald-400 font-bold">{e.region}</td>
+                      <td className="py-4 text-slate-400 italic">@{e.source}</td>
+                      <td className="py-4 text-right">
+                        <button onClick={() => onDelete(e.id)} className="p-2 text-rose-500/50 hover:text-rose-500"><Trash2 size={16} /></button>
+                      </td>
+                    </tr>
+                  ))}
+                  {events.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="py-12 text-center text-slate-600 font-bold uppercase tracking-widest italic">No active assets in grid</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
 
           {activeTab === 'personnel' && (
-            <table className="w-full text-left text-xs">
-              <thead className="text-slate-500 uppercase font-black tracking-widest border-b border-white/5">
-                <tr><th className="pb-4">Email</th><th className="pb-4">Role</th><th className="pb-4 text-right">Control</th></tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {users.map(u => (
-                  <tr key={u.id} className="hover:bg-white/5"><td className="py-4 text-white font-bold">{u.email}</td><td className="py-4"><span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${u.role === 'admin' ? 'bg-sky-500/20 text-sky-400' : 'bg-slate-500/20 text-slate-400'}`}>{u.role}</span></td><td className="py-4 text-right flex justify-end gap-2">{u.role === 'admin' ? <button onClick={() => updateRole(u.id, 'user')} className="p-2 text-amber-500/50 hover:text-amber-500"><ShieldOff size={16} /></button> : <button onClick={() => updateRole(u.id, 'admin')} className="p-2 text-emerald-500/50 hover:text-emerald-500"><Shield size={16} /></button>}</td></tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="space-y-12">
+              <table className="w-full text-left text-xs">
+                <thead className="text-slate-500 uppercase font-black tracking-widest border-b border-white/5">
+                  <tr><th className="pb-4">Operator</th><th className="pb-4">Role</th><th className="pb-4 text-right">Clearance</th></tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {users.map(u => (
+                    <tr key={u.id} className="hover:bg-white/5">
+                      <td className="py-4 text-white font-bold">{u.email}</td>
+                      <td className="py-4">
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
+                          u.role === 'owner' ? 'bg-amber-500/20 text-amber-400' : 
+                          u.role === 'admin' ? 'bg-sky-500/20 text-sky-400' : 
+                          'bg-slate-500/20 text-slate-400'
+                        }`}>
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="py-4 text-right flex justify-end gap-2">
+                        {isOwner && u.role !== 'owner' && (
+                          <>
+                            {u.role === 'admin' ? (
+                              <button onClick={() => updateRole(u.id, 'user')} className="p-2 text-amber-500/50 hover:text-amber-500" title="Demote to User"><ShieldOff size={16} /></button>
+                            ) : (
+                              <button onClick={() => updateRole(u.id, 'admin')} className="p-2 text-emerald-500/50 hover:text-emerald-500" title="Promote to Admin"><Shield size={16} /></button>
+                            )}
+                          </>
+                        )}
+                        {!isOwner && <span className="text-[8px] text-slate-600 font-black uppercase">Restricted</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {isOwner && (
+                <div className="mt-12 p-6 rounded-2xl border border-rose-500/20 bg-rose-500/5 space-y-4">
+                  <div className="flex items-center gap-3 text-rose-500">
+                    <Bomb size={20} />
+                    <h3 className="text-sm font-black uppercase tracking-widest">Danger Zone: Factory Reset</h3>
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                    This action will permanently wipe all operators, events, and logs. 
+                    Ownership must be re-established after this process.
+                  </p>
+                  <div className="flex items-center gap-4">
+                    <button 
+                      onClick={handleSystemReset}
+                      disabled={isResetting}
+                      className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${
+                        resetConfirm 
+                        ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/40 animate-pulse' 
+                        : 'bg-rose-500/10 text-rose-500 hover:bg-rose-500/20'
+                      }`}
+                    >
+                      {isResetting ? <RefreshCw size={14} className="animate-spin" /> : <AlertTriangle size={14} />}
+                      {resetConfirm ? "CONFIRM NUCLEAR RESET" : "WIPE SYSTEM DATABASE"}
+                    </button>
+                    {resetConfirm && (
+                      <button onClick={() => setResetConfirm(false)} className="text-[10px] font-bold text-slate-500 hover:text-white uppercase tracking-widest">Cancel</button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {activeTab === 'sources' && (
