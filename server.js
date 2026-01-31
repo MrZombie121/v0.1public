@@ -29,7 +29,6 @@ const getDB = () => {
             return initial;
         }
         const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
-        // Ensure sources exist
         if (!data.sources || data.sources.length === 0) {
             data.sources = DEFAULT_SOURCES;
             saveDB(data);
@@ -68,7 +67,6 @@ function checkAdmin(req, res, next) {
     } catch (e) { res.status(403).json({ error: "Invalid token" }); }
 }
 
-// --- SOURCES API ---
 app.get('/api/sources', (req, res) => {
     const db = getDB();
     res.json(db.sources || []);
@@ -91,7 +89,6 @@ app.delete('/api/admin/sources/:id', checkAdmin, (req, res) => {
     res.json({ success: true });
 });
 
-// --- AUTH API ---
 app.post('/api/auth/register', (req, res) => {
     const { email, password } = req.body;
     const db = getDB();
@@ -111,62 +108,80 @@ app.post('/api/auth/login', (req, res) => {
     else res.status(401).json({ success: false, message: "Invalid credentials" });
 });
 
-// --- TACTICAL API ---
 app.get('/api/events', (req, res) => {
     const db = getDB();
     const now = Date.now();
-    // Increase validity to 1 hour
-    const validEvents = db.events.filter(e => now - e.timestamp < 3600000);
-    res.json({ events: validEvents, logs: db.logs.slice(0, 50), systemInitialized: db.users.length > 0 });
+    const validEvents = (db.events || []).filter(e => now - e.timestamp < 3600000);
+    res.json({ events: validEvents, logs: (db.logs || []).slice(0, 50), systemInitialized: (db.users || []).length > 0 });
 });
 
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
+    console.log(`[INGEST] Source: ${source}, Text: ${text}`);
+    
+    // HARD-CODED TEST OVERRIDE: If text has "тест" or "test", always create an event in Odesa
+    if (text.toLowerCase().includes('тест') || text.toLowerCase().includes('test')) {
+        const db = getDB();
+        const testEvent = {
+            id: 'ev_test_' + Date.now(),
+            type: 'shahed',
+            region: 'odesa',
+            lat: 46.48,
+            lng: 30.72,
+            direction: 180,
+            timestamp: Date.now(),
+            source: source || 'Manual_Test',
+            rawText: text,
+            isVerified: false,
+            speed: 180
+        };
+        db.events.push(testEvent);
+        db.logs.unshift({ id: 'log_' + Date.now(), text: `TEST SPARKED: Odesa Node`, source, timestamp: Date.now() });
+        saveDB(db);
+        return res.json({ success: true, event: testEvent });
+    }
+
     const result = await processTacticalText(text, source);
     res.json({ success: !!result, ...result });
 });
 
 app.delete('/api/admin/event/:id', checkAdmin, (req, res) => {
     const db = getDB();
-    db.events = db.events.filter(e => e.id !== req.params.id);
+    db.events = (db.events || []).filter(e => e.id !== req.params.id);
     saveDB(db);
     res.json({ success: true });
 });
 
 async function processTacticalText(text, source) {
     if (!process.env.API_KEY) {
-        console.error("Missing API_KEY in environment");
+        console.error("[CRITICAL] Missing API_KEY in environment");
         return null;
     }
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     try {
-        const prompt = `TACTICAL INTEL REPORT: "${text}" (Source: ${source})
-        Task: Identify air threats in Ukraine. 
-        Note: If message mentions "тест" or "test", pick a major city like Odesa (46.48, 30.72) and create a shahed event.
-        Output EXACT format:
-        TYPE: [shahed|missile|kab]
-        REGION: [id] (odesa, kyiv, kharkiv, lviv, etc.)
-        LAT: [decimal_lat]
-        LNG: [decimal_lng]
-        DIR: [0-360]
-        CLEAR: [true|false]`;
-
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
-            contents: prompt,
+            contents: `REPORT: "${text}".
+            Identify threats in Ukraine. 
+            Output format:
+            TYPE: [shahed|missile|kab]
+            REGION: [odesa|kyiv|kharkiv|lviv|dnipro|etc]
+            LAT: [latitude]
+            LNG: [longitude]
+            DIR: [0-360]
+            CLEAR: [true|false]`,
             config: { 
-              tools: [{ googleMaps: {} }],
-              systemInstruction: "You are a tactical military sensor. Your primary goal is to extract coordinates and threat types from text. Always provide coordinates for identified locations."
+                tools: [{ googleMaps: {} }],
+                systemInstruction: "Military intel parser. Map regions to coordinates. If uncertain, use regional center." 
             }
         });
         
         const raw = response.text || "";
-        console.log(`[AI RESPONSE]: ${raw.substring(0, 100)}...`);
+        console.log(`[AI RAW]: ${raw}`);
 
         const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
         const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
-        
         const lat = latMatch ? parseFloat(latMatch[1]) : null;
         const lng = lngMatch ? parseFloat(lngMatch[1]) : null;
         const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1];
@@ -175,8 +190,8 @@ async function processTacticalText(text, source) {
         
         const db = getDB();
         if (isClear && region) {
-            db.events = db.events.filter(e => e.region !== region);
-            db.logs.unshift({ id: 'log_'+Date.now(), text: `CLEARED: ${region.toUpperCase()}`, source, timestamp: Date.now() });
+            db.events = db.events.filter(e => !e.region.includes(region));
+            db.logs.unshift({ id: 'log_'+Date.now(), text: `CLEARANCE: ${region.toUpperCase()}`, source, timestamp: Date.now() });
             saveDB(db);
             return { cleared: true };
         }
@@ -184,24 +199,17 @@ async function processTacticalText(text, source) {
         if (lat && lng) {
             const newEvent = { 
                 id: 'ev_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5), 
-                type, 
-                region: region || 'unknown', 
-                lat, 
-                lng, 
+                type, region: region || 'unknown', lat, lng, 
                 direction: parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1] || '180'), 
-                timestamp: Date.now(), 
-                source, 
-                rawText: text, 
-                isVerified: true, 
-                speed: type === 'missile' ? 850 : 185 
+                timestamp: Date.now(), source, rawText: text, isVerified: true, speed: type === 'missile' ? 850 : 185 
             };
             db.events.push(newEvent);
-            db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECTED: ${type.toUpperCase()} @ ${region ? region.toUpperCase() : 'GRID'}`, source, timestamp: Date.now() });
+            db.logs.unshift({ id: 'log_'+Date.now(), text: `CONTACT: ${type.toUpperCase()} @ ${region ? region.toUpperCase() : 'GRID'}`, source, timestamp: Date.now() });
             saveDB(db);
             return { event: newEvent };
         }
     } catch (e) { 
-        console.error("AI Processing Failure:", e.message); 
+        console.error("AI FAIL:", e.message); 
     }
     return null;
 }
@@ -209,12 +217,11 @@ async function processTacticalText(text, source) {
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) app.use(express.static(distPath));
 app.use(express.static(__dirname));
-
 app.get('*', (req, res) => {
-    if (req.path.startsWith('/api/')) return res.status(404).json({ error: "API Route Not Found" });
+    if (req.path.startsWith('/api/')) return res.status(404).json({ error: "404" });
     const target = fs.existsSync(path.join(distPath, 'index.html')) ? path.join(distPath, 'index.html') : path.join(__dirname, 'index.html');
     res.sendFile(target);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`[SERVER] SkyWatch Tactical Node online on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`[NODE] SkyWatch Tactical active on ${PORT}`));
