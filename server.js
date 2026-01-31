@@ -35,7 +35,6 @@ const getDB = () => {
         }
         return data;
     } catch (e) {
-        console.error("DB Read Error:", e);
         return { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
     }
 };
@@ -45,7 +44,6 @@ const saveDB = (data) => {
         fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
         return true;
     } catch (e) {
-        console.error("DB Write Error:", e);
         return false;
     }
 };
@@ -53,6 +51,9 @@ const saveDB = (data) => {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Init DB on startup
+getDB();
 
 // --- AUTH MIDDLEWARE ---
 function checkAdmin(req, res, next) {
@@ -76,7 +77,6 @@ app.post('/api/admin/sources', checkAdmin, (req, res) => {
     const { name, type } = req.body;
     const db = getDB();
     const newSource = { id: 's_' + Date.now(), name, type: type || 'telegram', enabled: true };
-    db.sources = db.sources || [];
     db.sources.push(newSource);
     saveDB(db);
     res.json(newSource);
@@ -84,7 +84,7 @@ app.post('/api/admin/sources', checkAdmin, (req, res) => {
 
 app.delete('/api/admin/sources/:id', checkAdmin, (req, res) => {
     const db = getDB();
-    db.sources = (db.sources || []).filter(s => s.id !== req.params.id);
+    db.sources = db.sources.filter(s => s.id !== req.params.id);
     saveDB(db);
     res.json({ success: true });
 });
@@ -112,14 +112,12 @@ app.get('/api/events', (req, res) => {
     const db = getDB();
     const now = Date.now();
     const validEvents = (db.events || []).filter(e => now - e.timestamp < 3600000);
-    res.json({ events: validEvents, logs: (db.logs || []).slice(0, 50), systemInitialized: (db.users || []).length > 0 });
+    res.json({ events: validEvents, logs: (db.logs || []).slice(0, 50), systemInitialized: db.users.length > 0 });
 });
 
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
-    console.log(`[INGEST] Source: ${source}, Text: ${text}`);
     
-    // HARD-CODED TEST OVERRIDE: If text has "тест" or "test", always create an event in Odesa
     if (text.toLowerCase().includes('тест') || text.toLowerCase().includes('test')) {
         const db = getDB();
         const testEvent = {
@@ -130,13 +128,13 @@ app.post('/api/ingest', async (req, res) => {
             lng: 30.72,
             direction: 180,
             timestamp: Date.now(),
-            source: source || 'Manual_Test',
+            source: source || 'MANUAL',
             rawText: text,
             isVerified: false,
             speed: 180
         };
         db.events.push(testEvent);
-        db.logs.unshift({ id: 'log_' + Date.now(), text: `TEST SPARKED: Odesa Node`, source, timestamp: Date.now() });
+        db.logs.unshift({ id: 'log_' + Date.now(), text: `TEST SIGNAL @ ODESA`, source, timestamp: Date.now() });
         saveDB(db);
         return res.json({ success: true, event: testEvent });
     }
@@ -147,70 +145,47 @@ app.post('/api/ingest', async (req, res) => {
 
 app.delete('/api/admin/event/:id', checkAdmin, (req, res) => {
     const db = getDB();
-    db.events = (db.events || []).filter(e => e.id !== req.params.id);
+    db.events = db.events.filter(e => e.id !== req.params.id);
     saveDB(db);
     res.json({ success: true });
 });
 
 async function processTacticalText(text, source) {
-    if (!process.env.API_KEY) {
-        console.error("[CRITICAL] Missing API_KEY in environment");
-        return null;
-    }
+    if (!process.env.API_KEY) return null;
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     try {
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
-            contents: `REPORT: "${text}".
-            Identify threats in Ukraine. 
-            Output format:
-            TYPE: [shahed|missile|kab]
-            REGION: [odesa|kyiv|kharkiv|lviv|dnipro|etc]
-            LAT: [latitude]
-            LNG: [longitude]
-            DIR: [0-360]
-            CLEAR: [true|false]`,
+            contents: `Parse tactical report: "${text}". Output: TYPE: [shahed|missile|kab], REGION: [id], LAT: [decimal], LNG: [decimal], DIR: [0-360], CLEAR: [true|false]`,
             config: { 
                 tools: [{ googleMaps: {} }],
-                systemInstruction: "Military intel parser. Map regions to coordinates. If uncertain, use regional center." 
+                systemInstruction: "Military intel bot. Convert text to coordinates. Default region centers if unsure." 
             }
         });
         
         const raw = response.text || "";
-        console.log(`[AI RAW]: ${raw}`);
-
         const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
         const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
         const lat = latMatch ? parseFloat(latMatch[1]) : null;
         const lng = lngMatch ? parseFloat(lngMatch[1]) : null;
         const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1];
         const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1] || 'shahed';
-        const isClear = raw.toLowerCase().includes('clear: true');
-        
-        const db = getDB();
-        if (isClear && region) {
-            db.events = db.events.filter(e => !e.region.includes(region));
-            db.logs.unshift({ id: 'log_'+Date.now(), text: `CLEARANCE: ${region.toUpperCase()}`, source, timestamp: Date.now() });
-            saveDB(db);
-            return { cleared: true };
-        }
         
         if (lat && lng) {
+            const db = getDB();
             const newEvent = { 
-                id: 'ev_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5), 
-                type, region: region || 'unknown', lat, lng, 
+                id: 'ev_' + Date.now(), 
+                type, region: region || 'grid', lat, lng, 
                 direction: parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1] || '180'), 
                 timestamp: Date.now(), source, rawText: text, isVerified: true, speed: type === 'missile' ? 850 : 185 
             };
             db.events.push(newEvent);
-            db.logs.unshift({ id: 'log_'+Date.now(), text: `CONTACT: ${type.toUpperCase()} @ ${region ? region.toUpperCase() : 'GRID'}`, source, timestamp: Date.now() });
+            db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECTION: ${type.toUpperCase()}`, source, timestamp: Date.now() });
             saveDB(db);
             return { event: newEvent };
         }
-    } catch (e) { 
-        console.error("AI FAIL:", e.message); 
-    }
+    } catch (e) { console.error("AI FAIL:", e.message); }
     return null;
 }
 
@@ -224,4 +199,4 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`[NODE] SkyWatch Tactical active on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`[NODE] SkyWatch Active on ${PORT}`));

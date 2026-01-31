@@ -6,7 +6,7 @@ import Controls from './components/Controls';
 import TelegramFeed from './components/TelegramFeed';
 import AdminDashboard from './components/AdminDashboard';
 import AuthModal from './components/AuthModal';
-import { ShieldCheck, Activity, Target, Zap, Clock, TrendingUp, RefreshCw, Loader2, AlertCircle, X, Settings, Lock, LogOut, User as UserIcon, Radio, Globe, Wifi } from 'lucide-react';
+import { ShieldCheck, Activity, Loader2, AlertCircle, X, Settings, Lock, LogOut } from 'lucide-react';
 
 interface User {
   email: string;
@@ -29,8 +29,10 @@ const App: React.FC = () => {
   const [systemInitialized, setSystemInitialized] = useState(false);
   
   const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('skywatch_user');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('skywatch_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
   });
 
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -42,29 +44,31 @@ const App: React.FC = () => {
   });
 
   const getApiUrl = (path: string) => {
-    if (window.location.port === '5173' || window.location.port === '5174') return `http://localhost:3000${path}`;
-    return path;
+    // Works for both dev (localhost:3000) and prod (same origin)
+    const baseUrl = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') 
+      ? `http://${window.location.hostname}:3000` 
+      : '';
+    return `${baseUrl}${path}`;
   };
 
   const refreshData = useCallback(async () => {
     try {
-      const [resEvents, resSources] = await Promise.all([
-        fetch(getApiUrl('/api/events')).catch(() => ({ ok: false })),
-        fetch(getApiUrl('/api/sources')).catch(() => ({ ok: false }))
-      ]);
-
-      if (resEvents.ok) {
-        const data = await (resEvents as Response).json();
+      const res = await fetch(getApiUrl('/api/events'));
+      if (res.ok) {
+        const data = await res.json();
         setEvents(data.events || []);
         setLogs(data.logs || []);
         setSystemInitialized(data.systemInitialized);
+        setSystemError(null);
+      } else {
+        setSystemError("NODE LINK ERROR");
       }
-      
+
+      const resSources = await fetch(getApiUrl('/api/sources'));
       if (resSources.ok) {
-        const sourceData = await (resSources as Response).json();
-        if (Array.isArray(sourceData)) setSources(sourceData);
+        const sourceData = await resSources.json();
+        setSources(sourceData || []);
       }
-      setSystemError(null);
     } catch (err) {
       setSystemError("NODE LINK LOST");
     } finally {
@@ -113,7 +117,7 @@ const App: React.FC = () => {
         <ShieldCheck className="text-rose-500 animate-pulse mb-6" size={64} />
         <h2 className="text-2xl font-black uppercase tracking-[0.4em] text-white">SKYWATCH</h2>
         <div className="mt-4 text-[10px] text-rose-500/60 font-bold uppercase tracking-widest flex items-center gap-2">
-           <Loader2 size={12} className="animate-spin" /> SYNCING...
+           <Loader2 size={12} className="animate-spin" /> INITIALIZING SYSTEM...
         </div>
       </div>
     );
@@ -132,22 +136,20 @@ const App: React.FC = () => {
         <MapDisplay events={events} onSelectEvent={setSelectedEvent} />
       </div>
 
-      <div className="absolute top-44 left-6 z-[1002] w-56">
-        <div className="glass-panel p-5 rounded-[1.5rem] border-l-2 border-sky-500 space-y-4">
+      <div className="absolute top-44 left-6 z-[1002] w-56 pointer-events-none">
+        <div className="glass-panel p-5 rounded-[1.5rem] border-l-2 border-sky-500 space-y-4 pointer-events-auto">
           <div className="flex items-center justify-between border-b border-white/5 pb-2">
             <span className="text-[11px] font-black text-white uppercase tracking-widest">INTEL MESH</span>
             <span className="text-[9px] font-black text-sky-500/70">v1.0</span>
           </div>
           <div className="space-y-3 max-h-[280px] overflow-y-auto custom-scrollbar pr-2">
-            {!sources || sources.length === 0 ? (
+            {sources.length === 0 ? (
                <div className="text-[8px] italic text-slate-600 uppercase text-center py-4">NO LINKS</div>
             ) : (
               sources.map(s => (
-                <div key={s.id} className="flex flex-col gap-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black text-slate-300 uppercase truncate">@{s.name}</span>
-                    <div className={`w-1.5 h-1.5 rounded-full ${s.enabled ? 'bg-emerald-500' : 'bg-slate-700'}`} />
-                  </div>
+                <div key={s.id} className="flex items-center justify-between">
+                  <span className="text-[10px] font-black text-slate-300 uppercase truncate">@{s.name}</span>
+                  <div className={`w-1.5 h-1.5 rounded-full ${s.enabled ? 'bg-emerald-500' : 'bg-slate-700'}`} />
                 </div>
               ))
             )}
@@ -230,7 +232,7 @@ const App: React.FC = () => {
       </div>
 
       {selectedEvent && (
-        <div className="absolute top-1/2 right-80 -translate-y-1/2 z-[1003] glass-panel p-8 rounded-[2.5rem] border-l-4 border-l-sky-500 w-96 shadow-2xl">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 md:translate-x-0 md:translate-y-0 md:top-1/2 md:right-80 z-[1003] glass-panel p-8 rounded-[2.5rem] border-l-4 border-l-sky-500 w-96 shadow-2xl">
            <div className="flex justify-between mb-6">
              <h3 className="text-xl font-black uppercase text-white tracking-tight">Intercept Data</h3>
              <button onClick={() => setSelectedEvent(null)} className="text-slate-500 hover:text-white"><X size={24} /></button>
