@@ -13,7 +13,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DB_PATH = path.join(__dirname, 'db.json');
 
-// Координаты областных центров для подстраховки
 const REGION_COORDS = {
     odesa: { lat: 46.48, lng: 30.72 },
     kyiv: { lat: 50.45, lng: 30.52 },
@@ -81,6 +80,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// --- AUTH MIDDLEWARE ---
+function checkAdmin(req, res, next) {
+    const token = req.headers['auth-token'];
+    if (!token) return res.status(403).json({ error: "Access Denied. Admin token required." });
+    try {
+        const [email, password] = Buffer.from(token, 'base64').toString().split(':');
+        const db = getDB();
+        const user = db.users.find(u => u.email === email && u.password === password);
+        if (user && user.role === 'admin') next();
+        else res.status(403).json({ error: "Admin access required" });
+    } catch (e) { res.status(403).json({ error: "Invalid token" }); }
+}
+
 app.get('/api/sources', (req, res) => {
     const db = getDB();
     res.json(db.sources || []);
@@ -88,105 +100,135 @@ app.get('/api/sources', (req, res) => {
 
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
-    console.log(`[INGEST] From ${source}: ${text.substring(0, 50)}...`);
-    
-    if (text.toLowerCase().includes('тест') || text.toLowerCase().includes('test')) {
-        const db = getDB();
-        const testEvent = {
-            id: 'ev_test_' + Date.now(),
-            type: 'shahed',
-            region: 'odesa',
-            lat: 46.48,
-            lng: 30.72,
-            direction: 180,
-            timestamp: Date.now(),
-            source: source || 'MANUAL',
-            rawText: text,
-            isVerified: false,
-            speed: 180
-        };
-        db.events.push(testEvent);
-        db.logs.unshift({ id: 'log_' + Date.now(), text: `TEST SIGNAL: ODESA`, source, timestamp: Date.now() });
-        saveDB(db);
-        return res.json({ success: true, event: testEvent });
+    if (!text) return res.status(400).json({ error: "Empty text" });
+
+    // Если это тестовый сигнал, проверяем права администратора
+    const isTest = text.toLowerCase().includes('тест') || text.toLowerCase().includes('test');
+    if (isTest) {
+        // Мы вызываем проверку вручную или через middleware
+        const token = req.headers['auth-token'];
+        if (!token) return res.status(403).json({ error: "Admin token required for test signals" });
+        
+        try {
+            const [email, password] = Buffer.from(token, 'base64').toString().split(':');
+            const db = getDB();
+            const user = db.users.find(u => u.email === email && u.password === password);
+            if (!user || user.role !== 'admin') {
+                return res.status(403).json({ error: "Only admins can spawn test signals" });
+            }
+            
+            // Если админ - спавним тест
+            const testEvent = {
+                id: 'ev_test_' + Date.now(),
+                type: 'shahed',
+                region: 'odesa',
+                lat: 46.48,
+                lng: 30.72,
+                direction: 180,
+                timestamp: Date.now(),
+                source: source || 'MANUAL',
+                rawText: text,
+                isVerified: false,
+                speed: 180
+            };
+            db.events.push(testEvent);
+            db.logs.unshift({ id: 'log_' + Date.now(), text: `TEST SIGNAL: ODESA`, source, timestamp: Date.now() });
+            saveDB(db);
+            return res.json({ success: true, event: testEvent });
+        } catch (e) {
+            return res.status(403).json({ error: "Authentication failed" });
+        }
     }
 
+    // Если это не тест - обрабатываем через ИИ
     const result = await processTacticalText(text, source);
-    res.json({ success: !!result, ...result });
+    if (result) {
+        res.json({ success: true, ...result });
+    } else {
+        res.status(422).json({ success: false, message: "Failed to parse tactical data" });
+    }
 });
 
 app.get('/api/events', (req, res) => {
     const db = getDB();
     const now = Date.now();
     const validEvents = (db.events || []).filter(e => now - e.timestamp < 3600000);
-    res.json({ events: validEvents, logs: (db.logs || []).slice(0, 50), systemInitialized: db.users.length > 0 });
+    res.json({ events: validEvents, logs: (db.logs || []).slice(0, 50), systemInitialized: (db.users || []).length > 0 });
 });
 
 async function processTacticalText(text, source) {
     if (!process.env.API_KEY) {
-        console.error("[CRITICAL] API_KEY not set");
+        console.error("[CRITICAL] API_KEY not set in environment");
         return null;
     }
+    
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     try {
         const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: `TACTICAL INTEL: "${text}".
-            Identify threat type, region, and coordinates.
-            Output exactly:
+            model: "gemini-2.5-flash-latest",
+            contents: `Identify air threats in Ukraine from this text: "${text}".
+            Required fields:
             TYPE: [shahed|missile|kab]
-            REGION: [id] (odesa, kyiv, kharkiv, lviv, etc.)
-            LAT: [decimal_lat]
-            LNG: [decimal_lng]
+            REGION: [id] (e.g. odesa, kyiv, lviv)
+            LAT: [decimal_latitude]
+            LNG: [decimal_longitude]
             DIR: [0-360]
-            CLEAR: [true|false]`,
+            CLEAR: [true|false]
+            
+            Use Google Maps tool to find coordinates of mentioned cities or regions.`,
             config: { 
                 tools: [{ googleMaps: {} }],
-                systemInstruction: "You are a military radar analyst. Extract geolocation and threat type. Use precise coordinates if available." 
+                systemInstruction: "You are a military intel extraction bot. Provide coordinates for every detection. If multiple cities mentioned, use the first one." 
             }
         });
         
-        const raw = response.text || "";
-        console.log(`[AI RESPONSE]: ${raw}`);
+        let raw = response.text || "";
+        raw = raw.replace(/```[a-z]*\n/g, '').replace(/```/g, '');
+        
+        console.log(`[AI RESPONSE RAW]: ${raw.trim()}`);
 
         const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
         const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
         const regionMatch = raw.match(/REGION:\s*([a-z_]+)/i);
+        const dirMatch = raw.match(/DIR:\s*(\d+)/i);
+        const typeMatch = raw.match(/TYPE:\s*(shahed|missile|kab)/i);
         
         let region = regionMatch ? regionMatch[1].toLowerCase() : 'grid';
         let lat = latMatch ? parseFloat(latMatch[1]) : null;
         let lng = lngMatch ? parseFloat(lngMatch[1]) : null;
+        let direction = dirMatch ? parseInt(dirMatch[1]) : 180;
+        let type = typeMatch ? typeMatch[1].toLowerCase() : 'shahed';
         
-        // Fallback to region center if AI didn't provide coords but gave region
         if ((!lat || !lng) && REGION_COORDS[region]) {
             lat = REGION_COORDS[region].lat;
             lng = REGION_COORDS[region].lng;
-            console.log(`[FALLBACK] Using coordinates for ${region}`);
+            console.log(`[FALLBACK] Used regional coords for ${region}`);
         }
 
-        const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1] || 'shahed';
-        
         if (lat && lng) {
             const db = getDB();
             const newEvent = { 
-                id: 'ev_' + Date.now(), 
-                type, region, lat, lng, 
-                direction: parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1] || '180'), 
-                timestamp: Date.now(), source, rawText: text, isVerified: true, speed: type === 'missile' ? 850 : 185 
+                id: 'ev_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4), 
+                type, region, lat, lng, direction, 
+                timestamp: Date.now(), source, rawText: text, isVerified: true, 
+                speed: type === 'missile' ? 850 : 185 
             };
             db.events.push(newEvent);
             db.logs.unshift({ id: 'log_'+Date.now(), text: `CONTACT: ${type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
             saveDB(db);
             return { event: newEvent };
         }
-    } catch (e) { console.error("AI FAIL:", e.message); }
+    } catch (e) { 
+        console.error("[AI ERROR]:", e.message); 
+    }
     return null;
 }
 
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) app.use(express.static(distPath));
 app.use(express.static(__dirname));
+
 app.get('*', (req, res) => {
     if (req.path.startsWith('/api/')) return res.status(404).send("404");
     const target = fs.existsSync(path.join(distPath, 'index.html')) ? path.join(distPath, 'index.html') : path.join(__dirname, 'index.html');
@@ -194,4 +236,4 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`[SKYWATCH] Tactical Node online on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`[SYSTEM] Tactical Grid active on ${PORT}`));

@@ -6,11 +6,11 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const PORT = process.env.PORT || 3000;
-// Use 127.0.0.1 for more reliable local ingestion on cloud hosts
-const BACKEND_URL = `http://127.0.0.1:${PORT}/api/ingest`;
-const SOURCES_URL = `http://127.0.0.1:${PORT}/api/sources`;
+// Use localhost explicitly to ensure it hits the internal loopback on cloud providers
+const BACKEND_URL = `http://localhost:${PORT}/api/ingest`;
+const SOURCES_URL = `http://localhost:${PORT}/api/sources`;
 
-const POLL_INTERVAL = 25000;
+const POLL_INTERVAL = 20000;
 const lastSeenIds = {};
 let activeChannels = [];
 
@@ -23,7 +23,7 @@ async function updateSources() {
                 .map(s => s.name);
         }
     } catch (e) {
-        console.warn("[SCRAPER] Sync failed. Retrying...");
+        console.warn("[SCRAPER] Sources sync failed. Keeping cache.");
     }
 }
 
@@ -38,9 +38,8 @@ async function scrapeChannel(channel) {
         const $ = cheerio.load(data);
         const messages = $('.tgme_widget_message_wrap');
         
-        // Look at the last 5 messages to skip ads or service messages
-        const lastFew = messages.slice(-5);
-        let foundNew = false;
+        // Check the most recent 3 messages
+        const lastFew = messages.slice(-3);
 
         lastFew.each(async (i, el) => {
             const msgEl = $(el);
@@ -48,30 +47,35 @@ async function scrapeChannel(channel) {
             const text = msgEl.find('.tgme_widget_message_text').text().trim();
 
             if (messageId && text && lastSeenIds[channel] !== messageId) {
-                console.log(`[SCRAPER] @${channel} NEW: ${text.substring(0, 30)}...`);
+                console.log(`[SCRAPER] @${channel} Detection: ${text.substring(0, 30)}...`);
                 
-                await axios.post(BACKEND_URL, {
-                    text: text,
-                    source: `TG_@${channel}`
-                }).catch(e => console.error(`[SCRAPER] Ingest Fail: ${e.message}`));
+                try {
+                    const res = await axios.post(BACKEND_URL, {
+                        text: text,
+                        source: `@${channel}`
+                    });
+                    console.log(`[SCRAPER] Ingest success: ${res.data.success}`);
+                } catch (e) {
+                    console.error(`[SCRAPER] Ingest error: ${e.response?.status} - ${e.message}`);
+                }
                 
                 lastSeenIds[channel] = messageId;
-                foundNew = true;
             }
         });
     } catch (error) {
-        console.error(`[SCRAPER] @${channel} Error: ${error.message}`);
+        console.error(`[SCRAPER] @${channel} Connection error: ${error.message}`);
     }
 }
 
 async function run() {
     console.log("------------------------------------------");
     console.log("   SkyWatch Scraper Node: OPERATIONAL    ");
+    console.log(`   Ingest Endpoint: ${BACKEND_URL}`);
     console.log("------------------------------------------");
 
     await updateSources();
     
-    // Initial loop
+    // Initial run
     for (const channel of activeChannels) {
         await scrapeChannel(channel);
         await new Promise(r => setTimeout(r, 1000));

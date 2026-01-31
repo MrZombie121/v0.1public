@@ -44,7 +44,6 @@ const App: React.FC = () => {
   });
 
   const getApiUrl = (path: string) => {
-    // Works for both dev (localhost:3000) and prod (same origin)
     const baseUrl = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') 
       ? `http://${window.location.hostname}:3000` 
       : '';
@@ -77,11 +76,15 @@ const App: React.FC = () => {
   }, []);
 
   const forceTest = async () => {
+    const token = localStorage.getItem('skywatch_token');
     try {
       await fetch(getApiUrl('/api/ingest'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'тест', source: 'HUD_MANUAL' })
+        headers: { 
+          'Content-Type': 'application/json',
+          'auth-token': token || ''
+        },
+        body: JSON.stringify({ text: 'тест', source: 'HUD_ADMIN_FORCE' })
       });
       refreshData();
     } catch (e) {}
@@ -154,9 +157,15 @@ const App: React.FC = () => {
               ))
             )}
           </div>
-          <button onClick={forceTest} className="w-full py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-[9px] font-black text-slate-400 hover:text-white uppercase transition-all tracking-widest">
-             FORCE TEST SIGNAL
-          </button>
+          
+          {user?.role === 'admin' && (
+            <button 
+              onClick={forceTest} 
+              className="w-full py-2 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 rounded-xl text-[9px] font-black text-emerald-400 hover:text-emerald-300 uppercase transition-all tracking-widest shadow-lg shadow-emerald-500/5"
+            >
+               FORCE TEST SIGNAL
+            </button>
+          )}
         </div>
       </div>
 
