@@ -38,7 +38,9 @@ function parseGroundedResponse(text) {
     };
 
     try {
-        if (text.toLowerCase().includes('clear') || text.toLowerCase().includes('отбой') || text.toLowerCase().includes('чисто')) {
+        if (!text) return result;
+        const lowerText = text.toLowerCase();
+        if (lowerText.includes('clear') || lowerText.includes('отбой') || lowerText.includes('чисто')) {
             result.isClear = true;
         }
 
@@ -91,7 +93,6 @@ async function processTacticalText(text, source) {
             return { cleared: true };
         }
 
-        // Only add if we have coordinates
         if (parsed.lat && parsed.lng) {
             const newEvent = {
                 id: 'srv_' + Math.random().toString(36).substr(2, 9),
@@ -115,6 +116,7 @@ async function processTacticalText(text, source) {
     }
 }
 
+// --- API ROUTES ---
 app.get('/api/events', (req, res) => {
     res.json({ events: airEvents, scraper: { lastRun: Date.now(), status: 'active' } });
 });
@@ -125,5 +127,34 @@ app.post('/api/ingest', async (req, res) => {
     res.json({ success: !!result, ...result });
 });
 
+app.post('/api/force-scrape', (req, res) => {
+    // Scraper trigger placeholder
+    res.json({ success: true });
+});
+
+// --- STATIC ASSETS & SPA ROUTING ---
+// Serve files from root and 'dist' (if exists)
+const publicPath = path.join(__dirname);
+const distPath = path.join(__dirname, 'dist');
+
+app.use(express.static(publicPath));
+if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+}
+
+// Global catch-all for SPA: serve index.html for any non-API route
+app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/')) return res.status(404).send('API endpoint not found');
+    
+    const indexPath = fs.existsSync(path.join(distPath, 'index.html')) 
+        ? path.join(distPath, 'index.html') 
+        : path.join(publicPath, 'index.html');
+        
+    res.sendFile(indexPath);
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Server running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[SERVER] SkyWatch Tactical Node running on port ${PORT}`);
+    console.log(`[SERVER] Serving static assets from ${publicPath}`);
+});
