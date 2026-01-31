@@ -11,7 +11,8 @@
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
 
       body, html, #root { 
-        height: 100%; 
+        height: 100vh; 
+        width: 100vw;
         margin: 0; 
         padding: 0; 
         background: #020617; 
@@ -20,8 +21,15 @@
         font-family: 'Inter', sans-serif;
       }
 
+      #root {
+        display: flex;
+        flex-direction: column;
+      }
+
       .leaflet-container { 
         background: #020617 !important; 
+        height: 100%;
+        width: 100%;
       }
 
       .glass-panel {
@@ -37,6 +45,15 @@
       
       .custom-marker { background: none !important; border: none !important; }
     </style>
+    <!-- Shim for process to prevent ReferenceError in browser -->
+    <script>
+      window.process = { 
+        env: { 
+          NODE_ENV: 'production'
+        },
+        cwd: () => '/'
+      };
+    </script>
     <script type="importmap">
 {
   "imports": {
@@ -49,15 +66,15 @@
     "axios": "https://esm.sh/axios@1.6.7",
     "cheerio": "https://esm.sh/cheerio@1.0.0-rc.12",
     "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "react/": "https://esm.sh/react@^19.2.4/",
     "cors": "https://esm.sh/cors@^2.8.6",
-    "express": "https://esm.sh/express@^5.2.1",
-    "dotenv": "https://esm.sh/dotenv@^17.2.3",
-    "fs": "https://esm.sh/fs@^0.0.1-security",
-    "url": "https://esm.sh/url@^0.11.4",
     "path": "https://esm.sh/path@^0.12.7",
+    "express": "https://esm.sh/express@^5.2.1",
+    "url": "https://esm.sh/url@^0.11.4",
+    "fs": "https://esm.sh/fs@^0.0.1-security",
+    "dotenv": "https://esm.sh/dotenv@^17.2.3",
     "telegram/": "https://esm.sh/telegram@^2.26.22/",
     "telegram": "https://esm.sh/telegram@^2.26.22",
+    "react/": "https://esm.sh/react@^19.2.4/",
     "input": "https://esm.sh/input@^1.0.1"
   }
 }
