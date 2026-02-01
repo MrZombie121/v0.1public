@@ -74,11 +74,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// API Endpoints
 app.get('/api/events', (req, res) => {
     const db = getDB();
     const now = Date.now();
-    // Фильтруем старые события (старше 1 часа)
     const valid = (db.events || []).filter(e => now - e.timestamp < 3600000);
     res.json({ 
         events: valid, 
@@ -91,37 +89,65 @@ app.get('/api/sources', (req, res) => res.json(getDB().sources || []));
 
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
-    console.log(`[INGEST] Request from ${source}: ${text}`);
+    console.log(`[INGEST] Message: ${text} from ${source}`);
+    
+    // FAST PATH FOR TEST SIGNALS
+    if (text.toLowerCase().includes('тест')) {
+        const db = getDB();
+        const regions = Object.keys(REGION_COORDS);
+        const randomRegion = regions[Math.floor(Math.random() * regions.length)];
+        const coords = REGION_COORDS[randomRegion];
+        
+        const testEvent = {
+            id: 'ev_test_' + Date.now(),
+            type: 'shahed',
+            region: randomRegion,
+            lat: coords.lat,
+            lng: coords.lng,
+            startLat: coords.lat,
+            startLng: coords.lng,
+            direction: Math.floor(Math.random() * 360),
+            timestamp: Date.now(),
+            source: source || 'SYSTEM',
+            rawText: text,
+            isVerified: false,
+            speed: 180
+        };
+        
+        db.events.push(testEvent);
+        db.logs.unshift({ 
+            id: 'log_'+Date.now(), 
+            text: `TEST SIGNAL INJECTED: ${randomRegion.toUpperCase()}`, 
+            source: source || 'SYSTEM', 
+            timestamp: Date.now() 
+        });
+        saveDB(db);
+        return res.json({ success: true, event: testEvent });
+    }
+
     const result = await processTacticalText(text, source);
     if (result) res.json({ success: true, ...result });
-    else res.status(422).json({ success: false, message: "Could not parse threat" });
+    else res.status(422).json({ success: false, message: "Could not parse" });
 });
 
 async function processTacticalText(text, source) {
-    if (!process.env.API_KEY) {
-        console.error("API_KEY MISSING");
-        return null;
-    }
-    
+    if (!process.env.API_KEY) return null;
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     try {
         const response = await ai.models.generateContent({
             model: "gemini-2.0-flash-exp",
-            contents: `Identify threats in Ukrainian tactical text: "${text}". 
-            Output format MUST be: TYPE:[shahed|missile|kab] REGION:[id] LAT:[lat] LNG:[lng] DIR:[0-360]
+            contents: `Identify air threat: "${text}". 
+            Output ONLY: TYPE:[shahed|missile|kab] REGION:[id] LAT:[lat] LNG:[lng] DIR:[0-360]
             Valid regions: odesa, kyiv, kharkiv, lviv, dnipro, zaporizhzhia, mykolaiv, kherson, chernihiv, sumy, poltava, vinnytsia, cherkasy, khmelnytskyi, zhytomyr, rivne, lutsk, ternopil, if, uzhhorod, chernivtsi, kirovohrad, donetsk, luhansk, crimea.`,
         });
 
         const raw = response.text || "";
-        console.log("[AI RESPONSE]", raw);
-
         let lat = parseFloat(raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
         let lng = parseFloat(raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
-        const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1].toLowerCase() || 'kyiv';
-        const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1].toLowerCase() || 'shahed';
+        const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1]?.toLowerCase() || 'kyiv';
+        const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1]?.toLowerCase() || 'shahed';
         const dir = parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1]) || 180;
 
-        // Fallback to region center if AI fails to give precise coordinates
         if (!lat || !lng) {
             const coords = REGION_COORDS[region] || REGION_COORDS.kyiv;
             lat = coords.lat;
@@ -130,37 +156,19 @@ async function processTacticalText(text, source) {
 
         const db = getDB();
         const event = {
-            id: 'ev_' + Date.now() + Math.random().toString(36).substr(2, 5),
-            type,
-            region, 
-            lat, 
-            lng,
-            startLat: lat,
-            startLng: lng,
-            direction: dir,
-            timestamp: Date.now(), 
-            source, 
-            rawText: text,
-            isVerified: !text.toLowerCase().includes('тест'),
-            speed: type === 'missile' ? 850 : 185
+            id: 'ev_' + Date.now(),
+            type, region, lat, lng, startLat: lat, startLng: lng,
+            direction: dir, timestamp: Date.now(), source, rawText: text,
+            isVerified: true, speed: type === 'missile' ? 850 : 185
         };
-
         db.events.push(event);
-        db.logs.unshift({ 
-            id: 'log_'+Date.now(), 
-            text: `DETECTION: ${type.toUpperCase()} -> ${region.toUpperCase()}`, 
-            source, 
-            timestamp: Date.now() 
-        });
+        db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECTION: ${type.toUpperCase()}`, source, timestamp: Date.now() });
         saveDB(db);
         return { event };
-    } catch (e) { 
-        console.error("AI Ingest Error:", e); 
-    }
+    } catch (e) { console.error(e); }
     return null;
 }
 
-// Auth & Admin placeholders
 app.post('/api/auth/register', (req, res) => {
     const { email, password } = req.body;
     const db = getDB();
@@ -168,8 +176,7 @@ app.post('/api/auth/register', (req, res) => {
     const newUser = { id: 'u_'+Date.now(), email, password, role: isFirst ? 'owner' : 'user' };
     db.users.push(newUser);
     saveDB(db);
-    const token = Buffer.from(`${email}:${password}`).toString('base64');
-    res.json({ success: true, user: { email, role: newUser.role }, token });
+    res.json({ success: true, user: { email, role: newUser.role }, token: 'tk_'+Date.now() });
 });
 
 app.post('/api/auth/login', (req, res) => {
@@ -177,8 +184,7 @@ app.post('/api/auth/login', (req, res) => {
     const db = getDB();
     const user = db.users.find(u => u.email === email && u.password === password);
     if (!user) return res.status(401).json({ success: false });
-    const token = Buffer.from(`${email}:${password}`).toString('base64');
-    res.json({ success: true, user: { email, role: user.role }, token });
+    res.json({ success: true, user: { email, role: user.role }, token: 'tk_'+Date.now() });
 });
 
 app.delete('/api/admin/event/:id', (req, res) => {
@@ -188,17 +194,12 @@ app.delete('/api/admin/event/:id', (req, res) => {
     res.json({ success: true });
 });
 
-// Hosting support
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) app.use(express.static(distPath));
 app.use(express.static(__dirname));
-
 app.get('*', (req, res) => {
-    if (req.path.startsWith('/api/')) return res.status(404).json({ error: "404" });
-    const distIndex = path.join(distPath, 'index.html');
-    if (fs.existsSync(distIndex)) return res.sendFile(distIndex);
+    if (req.path.startsWith('/api/')) return res.status(404).end();
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Tactical Hub active on ${PORT}`));
+app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log("Backend Live"));
