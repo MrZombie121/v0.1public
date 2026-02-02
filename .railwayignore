@@ -4,5 +4,4 @@ dist
 .git
 .vscode
 *.log
-package-lock.json
 .env
