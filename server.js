@@ -2,19 +2,31 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from "@google/genai";
 import dotenv from 'dotenv';
 import axios from 'axios';
+import pg from 'pg';
 import { startScraper } from './scraper.js';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DB_PATH = path.join(__dirname, 'db.json');
 const GEOJSON_REMOTE_URL = 'https://raw.githubusercontent.com/VadimGue/ukraine-geojson/master/ukraine.json';
+
+// PostgreSQL Configuration
+const { Pool } = pg;
+
+if (!process.env.DATABASE_URL) {
+  console.error("\x1b[31m[CRITICAL] DATABASE_URL is missing in environment variables!\x1b[0m");
+  process.exit(1);
+}
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
+});
 
 const REGION_COORDS = {
     odesa: { lat: 46.48, lng: 30.72 },
@@ -44,49 +56,103 @@ const REGION_COORDS = {
     crimea: { lat: 45.00, lng: 34.00 }
 };
 
-const DEFAULT_SOURCES = [
-    { id: "s1", name: "vanek_nikolaev", type: "telegram", enabled: true },
-    { id: "s2", name: "kpszsu", type: "telegram", enabled: true },
-    { id: "s3", name: "war_monitor", type: "telegram", enabled: true },
-    { id: "s4", name: "oddesitmedia", type: "telegram", enabled: true }
-];
+const initDB = async () => {
+  let client;
+  try {
+    client = await pool.connect();
+    console.log("[SERVER] Connected to PostgreSQL successfully");
+    
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE,
+        password TEXT,
+        role TEXT
+      );
+      CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        type TEXT,
+        region TEXT,
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        direction INTEGER,
+        timestamp BIGINT,
+        source TEXT,
+        raw_text TEXT,
+        is_verified BOOLEAN,
+        speed INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS logs (
+        id TEXT PRIMARY KEY,
+        text TEXT,
+        source TEXT,
+        timestamp BIGINT
+      );
+      CREATE TABLE IF NOT EXISTS sources (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE,
+        type TEXT,
+        enabled BOOLEAN
+      );
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key TEXT PRIMARY KEY,
+        value JSONB
+      );
+    `);
 
-const getDB = () => {
-    try {
-        if (!fs.existsSync(DB_PATH)) {
-            const initial = { events: [], logs: [], users: [], sources: DEFAULT_SOURCES, maintenanceMode: false, maintenanceUntil: 0 };
-            fs.writeFileSync(DB_PATH, JSON.stringify(initial, null, 2));
-            return initial;
-        }
-        const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
-        if (data.maintenanceMode === undefined) data.maintenanceMode = false;
-        if (data.maintenanceUntil === undefined) data.maintenanceUntil = 0;
-        return data;
-    } catch (e) {
-        return { events: [], logs: [], users: [], sources: DEFAULT_SOURCES, maintenanceMode: false, maintenanceUntil: 0 };
-    }
-};
+    await client.query(`
+      INSERT INTO system_settings (key, value) 
+      VALUES ('maintenance', '{"mode": false, "until": 0}') 
+      ON CONFLICT (key) DO NOTHING;
+    `);
 
-const saveDB = (data) => {
-    try {
-        fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
-        return true;
-    } catch (e) {
-        return false;
+    const defaultSources = [
+      ['s1', 'vanek_nikolaev', 'telegram', true],
+      ['s2', 'kpszsu', 'telegram', true],
+      ['s3', 'war_monitor', 'telegram', true],
+      ['s4', 'oddesitmedia', 'telegram', true]
+    ];
+    for (const src of defaultSources) {
+      await client.query(`
+        INSERT INTO sources (id, name, type, enabled) 
+        VALUES ($1, $2, $3, $4) 
+        ON CONFLICT (name) DO NOTHING;
+      `, src);
     }
+    console.log("[SERVER] Schema verified/initialized");
+  } catch (err) {
+    console.error("\x1b[31m[DB ERROR]\x1b[0m:", err.message);
+    throw err;
+  } finally {
+    if (client) client.release();
+  }
 };
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get('/api/status', (req, res) => {
-    const db = getDB();
-    res.json({ 
-        maintenanceMode: db.maintenanceMode,
-        maintenanceUntil: db.maintenanceUntil,
-        systemInitialized: (db.users || []).length > 0 
-    });
+const getMaintenanceState = async () => {
+  try {
+    const { rows } = await pool.query("SELECT value FROM system_settings WHERE key = 'maintenance'");
+    return rows[0]?.value || { mode: false, until: 0 };
+  } catch (e) {
+    return { mode: false, until: 0 };
+  }
+};
+
+app.get('/api/status', async (req, res) => {
+    try {
+        const maint = await getMaintenanceState();
+        const { rows: users } = await pool.query("SELECT count(*) FROM users");
+        res.json({ 
+            maintenanceMode: maint.mode,
+            maintenanceUntil: maint.until,
+            systemInitialized: parseInt(users[0].count) > 0 
+        });
+    } catch (e) {
+        res.status(500).json({ error: "DB connection failed" });
+    }
 });
 
 app.get('/api/map-data', async (req, res) => {
@@ -94,45 +160,56 @@ app.get('/api/map-data', async (req, res) => {
         const response = await axios.get(GEOJSON_REMOTE_URL, { timeout: 10000 });
         res.json(response.data);
     } catch (err) {
-        console.error("Failed to proxy GeoJSON:", err.message);
         res.status(502).json({ error: "Failed to fetch map data" });
     }
 });
 
-app.get('/api/events', (req, res) => {
-    const db = getDB();
-    const role = req.headers['x-user-role'];
-    
-    if (db.maintenanceMode && role !== 'owner') {
-        return res.status(503).json({ 
-            error: "MAINTENANCE_ACTIVE", 
-            maintenance: true,
-            until: db.maintenanceUntil 
-        });
-    }
+app.get('/api/events', async (req, res) => {
+    try {
+        const role = req.headers['x-user-role'];
+        const maint = await getMaintenanceState();
+        
+        if (maint.mode && role !== 'owner') {
+            return res.status(503).json({ 
+                error: "MAINTENANCE_ACTIVE", 
+                maintenance: true,
+                until: maint.until 
+            });
+        }
 
-    const now = Date.now();
-    const valid = (db.events || []).filter(e => now - e.timestamp < 3600000);
-    res.json({ 
-        events: valid, 
-        logs: (db.logs || []).slice(0, 50), 
-        systemInitialized: (db.users || []).length > 0,
-        maintenanceMode: db.maintenanceMode,
-        maintenanceUntil: db.maintenanceUntil
-    });
+        const oneHourAgo = Date.now() - 3600000;
+        const { rows: events } = await pool.query("SELECT * FROM events WHERE timestamp > $1", [oneHourAgo]);
+        const { rows: logs } = await pool.query("SELECT * FROM logs ORDER BY timestamp DESC LIMIT 50");
+        const { rows: users } = await pool.query("SELECT count(*) FROM users");
+
+        res.json({ 
+            events: events.map(e => ({ ...e, isVerified: e.is_verified, rawText: e.raw_text })), 
+            logs, 
+            systemInitialized: parseInt(users[0].count) > 0,
+            maintenanceMode: maint.mode,
+            maintenanceUntil: maint.until
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
-app.get('/api/sources', (req, res) => res.json(getDB().sources || []));
+app.get('/api/sources', async (req, res) => {
+    try {
+        const { rows } = await pool.query("SELECT * FROM sources");
+        res.json(rows);
+    } catch (e) {
+        res.status(500).json([]);
+    }
+});
 
-app.post('/api/admin/maintenance', (req, res) => {
+app.post('/api/admin/maintenance', async (req, res) => {
     const { enabled, until, userRole } = req.body;
     if (userRole !== 'owner') return res.status(403).json({ success: false });
     
-    const db = getDB();
-    db.maintenanceMode = !!enabled;
-    db.maintenanceUntil = until ? parseInt(until) : 0;
-    saveDB(db);
-    res.json({ success: true, maintenanceMode: db.maintenanceMode, maintenanceUntil: db.maintenanceUntil });
+    const newValue = { mode: !!enabled, until: until ? parseInt(until) : 0 };
+    await pool.query("UPDATE system_settings SET value = $1 WHERE key = 'maintenance'", [newValue]);
+    res.json({ success: true, ...newValue });
 });
 
 app.post('/api/ingest', async (req, res) => {
@@ -140,27 +217,28 @@ app.post('/api/ingest', async (req, res) => {
     if (!text) return res.status(400).json({ success: false });
 
     if (text.toLowerCase().includes('тест')) {
-        const db = getDB();
         const regions = Object.keys(REGION_COORDS);
-        const randomRegion = regions[Math.floor(Math.random() * regions.length)];
-        const coords = REGION_COORDS[randomRegion];
-        const testEvent = {
-            id: 'ev_test_' + Date.now(),
-            type: 'shahed',
-            region: randomRegion,
-            lat: coords.lat + (Math.random() - 0.5) * 0.2,
-            lng: coords.lng + (Math.random() - 0.5) * 0.2,
-            direction: Math.floor(Math.random() * 360),
-            timestamp: Date.now(),
-            source: source || 'HUD_SYSTEM',
-            rawText: text,
-            isVerified: false,
-            speed: 180
-        };
-        db.events.push(testEvent);
-        db.logs.unshift({ id: 'log_'+Date.now(), text: `TEST: ${randomRegion.toUpperCase()}`, source: source || 'SYSTEM', timestamp: Date.now() });
-        saveDB(db);
-        return res.json({ success: true, event: testEvent });
+        const region = regions[Math.floor(Math.random() * regions.length)];
+        const coords = REGION_COORDS[region];
+        const eventId = 'ev_test_' + Date.now();
+        const timestamp = Date.now();
+        
+        const event = [
+            eventId, 'shahed', region, 
+            coords.lat + (Math.random() - 0.5) * 0.2, 
+            coords.lng + (Math.random() - 0.5) * 0.2, 
+            Math.floor(Math.random() * 360), timestamp, source || 'HUD_SYSTEM', text, false, 180
+        ];
+
+        await pool.query(`
+            INSERT INTO events (id, type, region, lat, lng, direction, timestamp, source, raw_text, is_verified, speed) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `, event);
+
+        await pool.query("INSERT INTO logs (id, text, source, timestamp) VALUES ($1, $2, $3, $4)", 
+            ['log_'+Date.now(), `TEST: ${region.toUpperCase()}`, source || 'SYSTEM', timestamp]);
+
+        return res.json({ success: true });
     }
 
     const result = await processTacticalText(text, source);
@@ -182,36 +260,56 @@ async function processTacticalText(text, source) {
         const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1]?.toLowerCase() || 'kyiv';
         const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1]?.toLowerCase() || 'shahed';
         const dir = parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1]) || 180;
-        const db = getDB();
+        
         const finalLat = isNaN(lat) ? (REGION_COORDS[region]?.lat || 50.45) : lat;
         const finalLng = isNaN(lng) ? (REGION_COORDS[region]?.lng || 30.52) : lng;
-        const event = {
-            id: 'ev_' + Date.now(),
-            type, region, lat: finalLat, lng: finalLng, direction: dir, timestamp: Date.now(), source, rawText: text,
-            isVerified: true, speed: type === 'missile' ? 850 : 185
-        };
-        db.events.push(event);
-        db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECT: ${type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
-        saveDB(db);
-        return { event };
+        const timestamp = Date.now();
+        const id = 'ev_' + timestamp;
+        const speed = type === 'missile' ? 850 : 185;
+
+        await pool.query(`
+            INSERT INTO events (id, type, region, lat, lng, direction, timestamp, source, raw_text, is_verified, speed) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `, [id, type, region, finalLat, finalLng, dir, timestamp, source, text, true, speed]);
+
+        await pool.query("INSERT INTO logs (id, text, source, timestamp) VALUES ($1, $2, $3, $4)", 
+            ['log_'+Date.now(), `DETECT: ${type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp]);
+
+        return { success: true };
     } catch (e) { return null; }
 }
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
     const { email, password } = req.body;
-    const db = getDB();
-    const newUser = { id: 'u_'+Date.now(), email, password, role: db.users.length === 0 ? 'owner' : 'user' };
-    db.users.push(newUser);
-    saveDB(db);
-    res.json({ success: true, user: { email, role: newUser.role }, token: 'tk_'+Date.now() });
+    try {
+      const { rows: userCount } = await pool.query("SELECT count(*) FROM users");
+      const role = parseInt(userCount[0].count) === 0 ? 'owner' : 'user';
+      const id = 'u_'+Date.now();
+      await pool.query("INSERT INTO users (id, email, password, role) VALUES ($1, $2, $3, $4)", [id, email, password, role]);
+      res.json({ success: true, user: { email, role }, token: 'tk_'+Date.now() });
+    } catch (e) {
+      res.status(400).json({ success: false, message: "Email already registered or DB error" });
+    }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
-    const db = getDB();
-    const user = db.users.find(u => u.email === email && u.password === password);
-    if (!user) return res.status(401).json({ success: false });
-    res.json({ success: true, user: { email, role: user.role }, token: 'tk_'+Date.now() });
+    try {
+      const { rows: users } = await pool.query("SELECT * FROM users WHERE email = $1 AND password = $2", [email, password]);
+      if (users.length === 0) return res.status(401).json({ success: false });
+      res.json({ success: true, user: { email: users[0].email, role: users[0].role }, token: 'tk_'+Date.now() });
+    } catch (e) {
+      res.status(500).json({ success: false });
+    }
+});
+
+app.delete('/api/admin/event/:id', async (req, res) => {
+    try {
+      await pool.query("DELETE FROM events WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ success: false });
+    }
 });
 
 app.use(express.static(__dirname));
@@ -222,7 +320,14 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[SERVER] Listening on ${PORT}`);
-    startScraper(PORT);
+    try {
+        await initDB();
+        console.log("[SERVER] Database ready");
+        startScraper(PORT);
+    } catch (e) {
+        console.error("[CRITICAL] Server failed to start due to DB initialization error.");
+        process.exit(1);
+    }
 });
