@@ -45,12 +45,9 @@
       
       .custom-marker { background: none !important; border: none !important; }
     </style>
-    <!-- Shim for process to prevent ReferenceError in browser -->
     <script>
       window.process = { 
-        env: { 
-          NODE_ENV: 'production'
-        },
+        env: { NODE_ENV: 'production' },
         cwd: () => '/'
       };
     </script>
@@ -62,20 +59,20 @@
     "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
     "leaflet": "https://esm.sh/leaflet@1.9.4",
     "lucide-react": "https://esm.sh/lucide-react@0.474.0?bundle",
-    "@google/genai": "https://esm.sh/@google/genai@1.38.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "express": "https://esm.sh/express@^5.2.1",
+    "axios": "https://esm.sh/axios@^1.13.4",
+    "url": "https://esm.sh/url@^0.11.4",
     "cors": "https://esm.sh/cors@^2.8.6",
     "path": "https://esm.sh/path@^0.12.7",
+    "react/": "https://esm.sh/react@^19.2.4/",
     "fs": "https://esm.sh/fs@^0.0.1-security",
-    "url": "https://esm.sh/url@^0.11.4",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
     "dotenv": "https://esm.sh/dotenv@^17.2.3",
-    "telegram": "https://esm.sh/telegram@^2.26.22",
+    "@google/genai": "https://esm.sh/@google/genai@^1.39.0",
+    "express": "https://esm.sh/express@^5.2.1",
+    "cheerio": "https://esm.sh/cheerio@^1.2.0",
     "telegram/": "https://esm.sh/telegram@^2.26.22/",
-    "input": "https://esm.sh/input@^1.0.1",
-    "axios": "https://esm.sh/axios@^1.13.4",
-    "cheerio": "https://esm.sh/cheerio@^1.2.0"
+    "telegram": "https://esm.sh/telegram@^2.26.22",
+    "input": "https://esm.sh/input@^1.0.1"
   }
 }
 </script>

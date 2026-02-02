@@ -84,11 +84,16 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
     mapRef.current = map;
     loadGeoJSON();
 
-    setTimeout(() => map.invalidateSize(), 200);
+    // CRITICAL: Ensure the map knows its size after rendering to avoid black areas
+    setTimeout(() => {
+        if (mapRef.current) mapRef.current.invalidateSize();
+    }, 400);
 
     return () => { 
-      map.remove(); 
-      mapRef.current = null;
+      if (mapRef.current) {
+        mapRef.current.remove(); 
+        mapRef.current = null;
+      }
     };
   }, []);
 
@@ -124,10 +129,11 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
     events.forEach(event => {
       const lat = event.lat || event.startLat;
       const lng = event.lng || event.startLng;
-      if (typeof lat !== 'number' || typeof lng !== 'number') return;
+      if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
 
       const elapsedHours = (Date.now() - event.timestamp) / 3600000;
-      const dist = (event.speed || 180) * elapsedHours;
+      const speed = event.speed || 180;
+      const dist = speed * elapsedHours;
       const rad = (event.direction * Math.PI) / 180;
       
       const currentPos: [number, number] = [
@@ -136,7 +142,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
       ];
 
       let color = event.isVerified ? TARGET_COLORS.REAL : TARGET_COLORS.TEST;
-      if (event.isUserTest || event.rawText?.toLowerCase().includes('тест')) color = TARGET_COLORS.USER_TEST;
+      if (event.isUserTest || (event.rawText && event.rawText.toLowerCase().includes('тест'))) color = TARGET_COLORS.USER_TEST;
 
       const icon = L.divIcon({ 
         html: `<div style="transform: rotate(${event.direction}deg); filter: drop-shadow(0 0 10px ${color});">${getTargetIconSVG(event.type, color)}</div>`, 

@@ -89,9 +89,10 @@ app.get('/api/sources', (req, res) => res.json(getDB().sources || []));
 
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
-    console.log(`[INGEST] Message: ${text} from ${source}`);
     
-    // FAST PATH FOR TEST SIGNALS
+    if (!text) return res.status(400).json({ success: false });
+
+    // FAST TEST PATH
     if (text.toLowerCase().includes('тест')) {
         const db = getDB();
         const regions = Object.keys(REGION_COORDS);
@@ -99,35 +100,30 @@ app.post('/api/ingest', async (req, res) => {
         const coords = REGION_COORDS[randomRegion];
         
         const testEvent = {
-            id: 'ev_test_' + Date.now(),
+            id: 'ev_test_' + Date.now() + Math.random().toString(36).substr(2, 4),
             type: 'shahed',
             region: randomRegion,
-            lat: coords.lat,
-            lng: coords.lng,
+            lat: coords.lat + (Math.random() - 0.5) * 0.5,
+            lng: coords.lng + (Math.random() - 0.5) * 0.5,
             startLat: coords.lat,
             startLng: coords.lng,
             direction: Math.floor(Math.random() * 360),
             timestamp: Date.now(),
-            source: source || 'SYSTEM',
+            source: source || 'HUD_SYSTEM',
             rawText: text,
             isVerified: false,
             speed: 180
         };
         
         db.events.push(testEvent);
-        db.logs.unshift({ 
-            id: 'log_'+Date.now(), 
-            text: `TEST SIGNAL INJECTED: ${randomRegion.toUpperCase()}`, 
-            source: source || 'SYSTEM', 
-            timestamp: Date.now() 
-        });
+        db.logs.unshift({ id: 'log_'+Date.now(), text: `TEST SIGNAL: ${randomRegion.toUpperCase()}`, source: source || 'SYSTEM', timestamp: Date.now() });
         saveDB(db);
         return res.json({ success: true, event: testEvent });
     }
 
     const result = await processTacticalText(text, source);
     if (result) res.json({ success: true, ...result });
-    else res.status(422).json({ success: false, message: "Could not parse" });
+    else res.status(422).json({ success: false, message: "Parsing failed" });
 });
 
 async function processTacticalText(text, source) {
@@ -135,45 +131,52 @@ async function processTacticalText(text, source) {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     try {
         const response = await ai.models.generateContent({
-            model: "gemini-2.0-flash-exp",
-            contents: `Identify air threat: "${text}". 
-            Output ONLY: TYPE:[shahed|missile|kab] REGION:[id] LAT:[lat] LNG:[lng] DIR:[0-360]
+            model: "gemini-3-flash-preview",
+            contents: `Identify the air threat in this message from Ukraine: "${text}". 
+            Based on the locations mentioned (cities, landmarks), provide the most likely exact Latitude and Longitude for the current position.
+            Output EXACTLY in this format:
+            TYPE:[shahed|missile|kab]
+            REGION:[id]
+            LAT:[latitude_decimal]
+            LNG:[longitude_decimal]
+            DIR:[degrees_0_to_360]
+            
             Valid regions: odesa, kyiv, kharkiv, lviv, dnipro, zaporizhzhia, mykolaiv, kherson, chernihiv, sumy, poltava, vinnytsia, cherkasy, khmelnytskyi, zhytomyr, rivne, lutsk, ternopil, if, uzhhorod, chernivtsi, kirovohrad, donetsk, luhansk, crimea.`,
         });
 
         const raw = response.text || "";
-        let lat = parseFloat(raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
-        let lng = parseFloat(raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
+        const lat = parseFloat(raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
+        const lng = parseFloat(raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
         const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1]?.toLowerCase() || 'kyiv';
         const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1]?.toLowerCase() || 'shahed';
         const dir = parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1]) || 180;
 
-        if (!lat || !lng) {
-            const coords = REGION_COORDS[region] || REGION_COORDS.kyiv;
-            lat = coords.lat;
-            lng = coords.lng;
-        }
-
         const db = getDB();
+        const finalLat = isNaN(lat) ? (REGION_COORDS[region]?.lat || 50.45) : lat;
+        const finalLng = isNaN(lng) ? (REGION_COORDS[region]?.lng || 30.52) : lng;
+
         const event = {
             id: 'ev_' + Date.now(),
-            type, region, lat, lng, startLat: lat, startLng: lng,
+            type, region, 
+            lat: finalLat, lng: finalLng, 
+            startLat: finalLat, startLng: finalLng,
             direction: dir, timestamp: Date.now(), source, rawText: text,
             isVerified: true, speed: type === 'missile' ? 850 : 185
         };
         db.events.push(event);
-        db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECTION: ${type.toUpperCase()}`, source, timestamp: Date.now() });
+        db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECTION: ${type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
         saveDB(db);
         return { event };
-    } catch (e) { console.error(e); }
-    return null;
+    } catch (e) { 
+        console.error("AI Error:", e);
+        return null; 
+    }
 }
 
 app.post('/api/auth/register', (req, res) => {
     const { email, password } = req.body;
     const db = getDB();
-    const isFirst = db.users.length === 0;
-    const newUser = { id: 'u_'+Date.now(), email, password, role: isFirst ? 'owner' : 'user' };
+    const newUser = { id: 'u_'+Date.now(), email, password, role: db.users.length === 0 ? 'owner' : 'user' };
     db.users.push(newUser);
     saveDB(db);
     res.json({ success: true, user: { email, role: newUser.role }, token: 'tk_'+Date.now() });
@@ -197,9 +200,11 @@ app.delete('/api/admin/event/:id', (req, res) => {
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) app.use(express.static(distPath));
 app.use(express.static(__dirname));
+
 app.get('*', (req, res) => {
     if (req.path.startsWith('/api/')) return res.status(404).end();
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log("Backend Live"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => console.log(`Backend Active on ${PORT}`));
