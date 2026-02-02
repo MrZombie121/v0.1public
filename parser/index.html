@@ -1,0 +1,87 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SkyWatch UA | Tactical Intel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+
+      body, html, #root { 
+        height: 100vh; 
+        width: 100vw;
+        margin: 0; 
+        padding: 0; 
+        background: #020617; 
+        color: #fafafa; 
+        overflow: hidden; 
+        font-family: 'Inter', sans-serif;
+      }
+
+      #root {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+
+      .leaflet-container { 
+        background: #020617 !important; 
+        height: 100%;
+        width: 100%;
+      }
+
+      .glass-panel {
+        background: rgba(15, 23, 42, 0.8);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+      }
+
+      .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+      
+      .custom-marker { background: none !important; border: none !important; }
+    </style>
+    <script>
+      window.process = { 
+        env: { NODE_ENV: 'production' },
+        cwd: () => '/'
+      };
+    </script>
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "leaflet": "https://esm.sh/leaflet@1.9.4",
+    "lucide-react": "https://esm.sh/lucide-react@0.474.0?bundle",
+    "@google/genai": "https://esm.sh/@google/genai@1.38.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "express": "https://esm.sh/express@^5.2.1",
+    "cors": "https://esm.sh/cors@^2.8.6",
+    "path": "https://esm.sh/path@^0.12.7",
+    "fs": "https://esm.sh/fs@^0.0.1-security",
+    "url": "https://esm.sh/url@^0.11.4",
+    "dotenv": "https://esm.sh/dotenv@^17.2.3",
+    "telegram": "https://esm.sh/telegram@^2.26.22",
+    "telegram/": "https://esm.sh/telegram@^2.26.22/",
+    "input": "https://esm.sh/input@^1.0.1",
+    "axios": "https://esm.sh/axios@^1.13.4",
+    "cheerio": "https://esm.sh/cheerio@^1.2.0",
+    "child_process": "https://esm.sh/child_process@^1.0.2"
+  }
+}
+</script>
+  <link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
