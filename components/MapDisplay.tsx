@@ -9,7 +9,8 @@ interface MapDisplayProps {
   onSelectEvent: (event: AirEvent | null) => void;
 }
 
-const GEOJSON_URL = 'https://raw.githubusercontent.com/VadimGue/ukraine-geojson/master/ukraine.json';
+// Using internal API to proxy GeoJSON and avoid CORS/External fetch issues
+const INTERNAL_MAP_API = '/api/map-data';
 
 const REGION_ID_MAP: Record<string, string> = {
   "odesa": "odesa", "одеська": "odesa", "kyiv": "kyiv", "київська": "kyiv",
@@ -53,7 +54,10 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
 
   const loadGeoJSON = async () => {
     try {
-      const response = await fetch(GEOJSON_URL);
+      const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      const apiUrl = isLocal && window.location.port !== '3000' ? `http://localhost:3000${INTERNAL_MAP_API}` : INTERNAL_MAP_API;
+
+      const response = await fetch(apiUrl);
       if (response.ok) {
         const data = await response.json();
         if (mapRef.current) {
@@ -64,9 +68,13 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
           setGridStatus('online');
           return;
         }
+      } else {
+          throw new Error("Proxy response not OK");
       }
-    } catch (e) { console.error("GeoJSON Error", e); }
-    setGridStatus('offline');
+    } catch (e) { 
+        console.warn("GeoJSON Proxy Error - Falling back to local offline mode", e); 
+        setGridStatus('offline');
+    }
   };
 
   useEffect(() => {
@@ -84,10 +92,9 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
     mapRef.current = map;
     loadGeoJSON();
 
-    // CRITICAL: Ensure the map knows its size after rendering to avoid black areas
     setTimeout(() => {
         if (mapRef.current) mapRef.current.invalidateSize();
-    }, 400);
+    }, 600);
 
     return () => { 
       if (mapRef.current) {
@@ -129,7 +136,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
     events.forEach(event => {
       const lat = event.lat || event.startLat;
       const lng = event.lng || event.startLng;
-      if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) return;
+      if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng) || lat === 0) return;
 
       const elapsedHours = (Date.now() - event.timestamp) / 3600000;
       const speed = event.speed || 180;

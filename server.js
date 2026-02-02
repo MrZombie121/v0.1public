@@ -6,12 +6,15 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from "@google/genai";
 import dotenv from 'dotenv';
+import axios from 'axios';
+import { startScraper } from './scraper.js';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DB_PATH = path.join(__dirname, 'db.json');
+const GEOJSON_REMOTE_URL = 'https://raw.githubusercontent.com/VadimGue/ukraine-geojson/master/ukraine.json';
 
 const REGION_COORDS = {
     odesa: { lat: 46.48, lng: 30.72 },
@@ -74,6 +77,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get('/api/map-data', async (req, res) => {
+    try {
+        const response = await axios.get(GEOJSON_REMOTE_URL, { timeout: 10000 });
+        res.json(response.data);
+    } catch (err) {
+        console.error("Failed to proxy GeoJSON:", err.message);
+        res.status(502).json({ error: "Failed to fetch map data" });
+    }
+});
+
 app.get('/api/events', (req, res) => {
     const db = getDB();
     const now = Date.now();
@@ -89,24 +102,21 @@ app.get('/api/sources', (req, res) => res.json(getDB().sources || []));
 
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
-    
     if (!text) return res.status(400).json({ success: false });
 
-    // FAST TEST PATH
+    console.log(`[INGEST] Inbound from ${source}: ${text.substring(0, 50)}...`);
+
     if (text.toLowerCase().includes('тест')) {
         const db = getDB();
         const regions = Object.keys(REGION_COORDS);
         const randomRegion = regions[Math.floor(Math.random() * regions.length)];
         const coords = REGION_COORDS[randomRegion];
-        
         const testEvent = {
-            id: 'ev_test_' + Date.now() + Math.random().toString(36).substr(2, 4),
+            id: 'ev_test_' + Date.now(),
             type: 'shahed',
             region: randomRegion,
-            lat: coords.lat + (Math.random() - 0.5) * 0.5,
-            lng: coords.lng + (Math.random() - 0.5) * 0.5,
-            startLat: coords.lat,
-            startLng: coords.lng,
+            lat: coords.lat + (Math.random() - 0.5) * 0.2,
+            lng: coords.lng + (Math.random() - 0.5) * 0.2,
             direction: Math.floor(Math.random() * 360),
             timestamp: Date.now(),
             source: source || 'HUD_SYSTEM',
@@ -114,61 +124,65 @@ app.post('/api/ingest', async (req, res) => {
             isVerified: false,
             speed: 180
         };
-        
         db.events.push(testEvent);
-        db.logs.unshift({ id: 'log_'+Date.now(), text: `TEST SIGNAL: ${randomRegion.toUpperCase()}`, source: source || 'SYSTEM', timestamp: Date.now() });
+        db.logs.unshift({ id: 'log_'+Date.now(), text: `TEST: ${randomRegion.toUpperCase()}`, source: source || 'SYSTEM', timestamp: Date.now() });
         saveDB(db);
         return res.json({ success: true, event: testEvent });
     }
 
     const result = await processTacticalText(text, source);
     if (result) res.json({ success: true, ...result });
-    else res.status(422).json({ success: false, message: "Parsing failed" });
+    else res.status(422).json({ success: false, message: "AI processing failed" });
 });
 
 async function processTacticalText(text, source) {
-    if (!process.env.API_KEY) return null;
+    if (!process.env.API_KEY) {
+        console.error("[AI] MISSING API_KEY");
+        return null;
+    }
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     try {
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
             contents: `Identify the air threat in this message from Ukraine: "${text}". 
-            Based on the locations mentioned (cities, landmarks), provide the most likely exact Latitude and Longitude for the current position.
+            Extract precise Lat/Lng based on the mentioned city or area. If unsure, use general region coordinates.
             Output EXACTLY in this format:
             TYPE:[shahed|missile|kab]
             REGION:[id]
-            LAT:[latitude_decimal]
-            LNG:[longitude_decimal]
-            DIR:[degrees_0_to_360]
+            LAT:[decimal]
+            LNG:[decimal]
+            DIR:[degrees]
             
             Valid regions: odesa, kyiv, kharkiv, lviv, dnipro, zaporizhzhia, mykolaiv, kherson, chernihiv, sumy, poltava, vinnytsia, cherkasy, khmelnytskyi, zhytomyr, rivne, lutsk, ternopil, if, uzhhorod, chernivtsi, kirovohrad, donetsk, luhansk, crimea.`,
         });
-
         const raw = response.text || "";
-        const lat = parseFloat(raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
-        const lng = parseFloat(raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
-        const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1]?.toLowerCase() || 'kyiv';
-        const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1]?.toLowerCase() || 'shahed';
-        const dir = parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1]) || 180;
+        const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
+        const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
+        const regionMatch = raw.match(/REGION:\s*([a-z_]+)/i);
+        const typeMatch = raw.match(/TYPE:\s*(shahed|missile|kab)/i);
+        const dirMatch = raw.match(/DIR:\s*(\d+)/i);
+
+        const lat = latMatch ? parseFloat(latMatch[1]) : null;
+        const lng = lngMatch ? parseFloat(lngMatch[1]) : null;
+        const region = regionMatch ? regionMatch[1].toLowerCase() : 'kyiv';
+        const type = typeMatch ? typeMatch[1].toLowerCase() : 'shahed';
+        const dir = dirMatch ? parseInt(dirMatch[1]) : 180;
 
         const db = getDB();
-        const finalLat = isNaN(lat) ? (REGION_COORDS[region]?.lat || 50.45) : lat;
-        const finalLng = isNaN(lng) ? (REGION_COORDS[region]?.lng || 30.52) : lng;
+        const finalLat = isNaN(lat) || lat === null ? (REGION_COORDS[region]?.lat || 50.45) : lat;
+        const finalLng = isNaN(lng) || lng === null ? (REGION_COORDS[region]?.lng || 30.52) : lng;
 
         const event = {
             id: 'ev_' + Date.now(),
-            type, region, 
-            lat: finalLat, lng: finalLng, 
-            startLat: finalLat, startLng: finalLng,
-            direction: dir, timestamp: Date.now(), source, rawText: text,
+            type, region, lat: finalLat, lng: finalLng, direction: dir, timestamp: Date.now(), source, rawText: text,
             isVerified: true, speed: type === 'missile' ? 850 : 185
         };
         db.events.push(event);
-        db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECTION: ${type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
+        db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECT: ${type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
         saveDB(db);
         return { event };
     } catch (e) { 
-        console.error("AI Error:", e);
+        console.error("[AI ERROR]:", e.message);
         return null; 
     }
 }
@@ -197,8 +211,6 @@ app.delete('/api/admin/event/:id', (req, res) => {
     res.json({ success: true });
 });
 
-const distPath = path.join(__dirname, 'dist');
-if (fs.existsSync(distPath)) app.use(express.static(distPath));
 app.use(express.static(__dirname));
 
 app.get('*', (req, res) => {
@@ -207,4 +219,9 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Backend Active on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[SERVER] Listening on ${PORT}`);
+    // Start Scraper logic in the same process or separate but reliably
+    console.log("[SERVER] Activating Telegram Scraper...");
+    startScraper(PORT);
+});

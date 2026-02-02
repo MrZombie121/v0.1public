@@ -1,18 +1,15 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
-import { AirEvent, TargetType } from '../types';
-import { TARGET_COLORS, UKRAINE_BOUNDS } from '../constants';
+import { AirEvent, TargetType } from './types';
+import { TARGET_COLORS, UKRAINE_BOUNDS } from './constants';
 
 interface MapDisplayProps {
   events: AirEvent[];
   onSelectEvent: (event: AirEvent | null) => void;
 }
 
-const GEOJSON_SOURCES = [
-  'https://raw.githubusercontent.com/VadimGue/ukraine-geojson/master/ukraine.json',
-  'https://cdn.jsdelivr.net/gh/EugeneBoryshpolets/ukraine_geojson@main/ukraine_regions.json'
-];
+const GEOJSON_URL = 'https://raw.githubusercontent.com/VadimGue/ukraine-geojson/master/ukraine.json';
 
 const REGION_ID_MAP: Record<string, string> = {
   "odesa": "odesa", "одеська": "odesa", "kyiv": "kyiv", "київська": "kyiv",
@@ -32,7 +29,7 @@ const normalizeStr = (val: any): string => {
 };
 
 const getTargetIconSVG = (type: TargetType, color: string) => {
-  const size = type === TargetType.MISSILE ? 28 : 24;
+  const size = type === TargetType.MISSILE ? 32 : 26;
   switch (type) {
     case TargetType.SHAHED: return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}" stroke="white" stroke-width="1.5"><path d="M12 2L4 22L12 18L20 22L12 2Z"/></svg>`;
     case TargetType.MISSILE: return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}" stroke="white" stroke-width="1.5"><path d="M12 2L10 6V18L12 22L14 18V6L12 2Z"/></svg>`;
@@ -55,30 +52,25 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   }, []);
 
   const loadGeoJSON = async () => {
-    for (const url of GEOJSON_SOURCES) {
-      try {
-        const response = await fetch(url);
-        if (response.ok) {
-          const data = await response.json();
-          applyGeoData(data);
+    try {
+      const response = await fetch(GEOJSON_URL);
+      if (response.ok) {
+        const data = await response.json();
+        if (mapRef.current) {
+          if (geojsonLayerRef.current) mapRef.current.removeLayer(geojsonLayerRef.current);
+          geojsonLayerRef.current = L.geoJSON(data, {
+            style: { color: 'rgba(255, 255, 255, 0.1)', weight: 1, fillColor: 'transparent', fillOpacity: 0 }
+          }).addTo(mapRef.current);
           setGridStatus('online');
           return;
         }
-      } catch (e) {}
-    }
+      }
+    } catch (e) { console.error("GeoJSON Error", e); }
     setGridStatus('offline');
   };
 
-  const applyGeoData = (data: any) => {
-    if (!mapRef.current) return;
-    if (geojsonLayerRef.current) mapRef.current.removeLayer(geojsonLayerRef.current);
-    geojsonLayerRef.current = L.geoJSON(data, {
-      style: { color: 'rgba(255, 255, 255, 0.1)', weight: 1, fillColor: 'transparent', fillOpacity: 0 }
-    }).addTo(mapRef.current);
-  };
-
   useEffect(() => {
-    if (!mapContainerRef.current) return;
+    if (!mapContainerRef.current || mapRef.current) return;
     
     const map = L.map(mapContainerRef.current, {
       center: [48.3794, 31.1656],
@@ -90,12 +82,18 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
     mapRef.current = map;
-    
     loadGeoJSON();
 
+    // CRITICAL FIX: Ensure the map recalculates size after DOM render
+    setTimeout(() => {
+        if (mapRef.current) mapRef.current.invalidateSize();
+    }, 500);
+
     return () => { 
-      map.remove(); 
-      mapRef.current = null;
+      if (mapRef.current) {
+        mapRef.current.remove(); 
+        mapRef.current = null;
+      }
     };
   }, []);
 
@@ -112,18 +110,16 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
       geojsonLayerRef.current.eachLayer((layer: any) => {
         const p = layer.feature?.properties;
         if (!p) return;
-        
         let regionId = null;
         const names = [p.name, p.name_en, p.NAME_1, p.id];
         for (const n of names) {
           const norm = normalizeStr(n);
           if (REGION_ID_MAP[norm]) { regionId = REGION_ID_MAP[norm]; break; }
         }
-
         const path = layer as L.Path;
         if (regionId && activeRegions.has(regionId)) {
           const color = activeRegions.get(regionId)!;
-          path.setStyle({ color, weight: 2, fillColor: color, fillOpacity: 0.15 + (Math.sin(ticker * 0.5) * 0.05) });
+          path.setStyle({ color, weight: 2, fillColor: color, fillOpacity: 0.1 });
         } else {
           path.setStyle({ color: 'rgba(255, 255, 255, 0.1)', weight: 1, fillColor: 'transparent', fillOpacity: 0 });
         }
@@ -131,19 +127,22 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
     }
 
     events.forEach(event => {
-      if (typeof event.lat !== 'number' || typeof event.lng !== 'number') return;
+      const lat = event.lat || event.startLat;
+      const lng = event.lng || event.startLng;
+      if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng) || lat === 0) return;
 
       const elapsedHours = (Date.now() - event.timestamp) / 3600000;
-      const dist = event.speed * elapsedHours;
+      const speed = event.speed || 180;
+      const dist = speed * elapsedHours;
       const rad = (event.direction * Math.PI) / 180;
       
       const currentPos: [number, number] = [
-        event.lat + (dist * Math.cos(rad)) / 111.32, 
-        event.lng + (dist * Math.sin(rad)) / (111.32 * Math.cos(event.lat * Math.PI / 180))
+        lat + (dist * Math.cos(rad)) / 111.32, 
+        lng + (dist * Math.sin(rad)) / (111.32 * Math.cos(lat * Math.PI / 180))
       ];
 
       let color = event.isVerified ? TARGET_COLORS.REAL : TARGET_COLORS.TEST;
-      if (event.isUserTest || event.rawText?.toLowerCase().includes('тест')) color = TARGET_COLORS.USER_TEST;
+      if (event.isUserTest || (event.rawText && event.rawText.toLowerCase().includes('тест'))) color = TARGET_COLORS.USER_TEST;
 
       const icon = L.divIcon({ 
         html: `<div style="transform: rotate(${event.direction}deg); filter: drop-shadow(0 0 10px ${color});">${getTargetIconSVG(event.type, color)}</div>`, 
@@ -170,7 +169,7 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ events, onSelectEvent }) => {
   }, [events, ticker, onSelectEvent]);
 
   return (
-    <div className="relative w-full h-full min-h-[400px]">
+    <div className="relative w-full h-full flex-1 min-h-0 overflow-hidden">
       <div ref={mapContainerRef} className="w-full h-full absolute inset-0 z-0 bg-[#020617]" />
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1001] glass-panel px-5 py-2 rounded-full border border-white/10 flex items-center gap-3 shadow-2xl backdrop-blur-md">
          <div className={`w-2.5 h-2.5 rounded-full animate-pulse shadow-[0_0_10px] ${gridStatus === 'online' ? 'bg-emerald-500 shadow-emerald-500' : gridStatus === 'syncing' ? 'bg-amber-500 shadow-amber-500' : 'bg-rose-500 shadow-rose-500'}`} />

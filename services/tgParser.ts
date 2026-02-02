@@ -22,12 +22,12 @@ export class TGParser {
   }
 
   public static async parseAI(text: string): Promise<{ event: Partial<AirEvent>, modifiers: ParsedModifier } | null> {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
     
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `Analyze for SkyWatch: "${text}". Use Google Maps for coordinates.
+        model: "gemini-3-flash-preview",
+        contents: `Analyze for SkyWatch: "${text}".
         Format output:
         TYPE: [shahed|missile|kab]
         REGION: [id]
@@ -35,12 +35,10 @@ export class TGParser {
         LNG: [lng]
         DIR: [dir]
         CLEAR: [true|false]`,
-        config: {
-          tools: [{ googleMaps: {} }]
-        }
       });
 
-      const data = this.parseGrounded(response.text);
+      const textOutput = response.text || "";
+      const data = this.parseGrounded(textOutput);
 
       return {
         event: { 
@@ -58,7 +56,7 @@ export class TGParser {
         }
       };
     } catch (error) {
-      console.error("AI Grounding failed:", error);
+      console.error("AI Parser failed:", error);
       return null;
     }
   }

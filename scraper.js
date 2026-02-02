@@ -5,89 +5,83 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const PORT = process.env.PORT || 3000;
-// Use localhost explicitly to ensure it hits the internal loopback on cloud providers
-const BACKEND_URL = `http://localhost:${PORT}/api/ingest`;
-const SOURCES_URL = `http://localhost:${PORT}/api/sources`;
-
-const POLL_INTERVAL = 20000;
+const POLL_INTERVAL = 15000;
 const lastSeenIds = {};
 let activeChannels = [];
 
-async function updateSources() {
-    try {
-        const { data } = await axios.get(SOURCES_URL, { timeout: 5000 });
-        if (Array.isArray(data)) {
-            activeChannels = data
-                .filter(s => s.enabled && s.type === 'telegram')
-                .map(s => s.name);
+export async function startScraper(port) {
+    const BACKEND_URL = `http://localhost:${port}/api/ingest`;
+    const SOURCES_URL = `http://localhost:${port}/api/sources`;
+
+    async function updateSources() {
+        try {
+            const { data } = await axios.get(SOURCES_URL, { timeout: 5000 });
+            if (Array.isArray(data)) {
+                activeChannels = data
+                    .filter(s => s.enabled && s.type === 'telegram')
+                    .map(s => s.name);
+            }
+        } catch (e) {
+            console.warn("[SCRAPER] Sources sync failed. Using existing channels.");
         }
-    } catch (e) {
-        console.warn("[SCRAPER] Sources sync failed. Keeping cache.");
     }
-}
 
-async function scrapeChannel(channel) {
-    try {
-        const url = `https://t.me/s/${channel}`;
-        const { data } = await axios.get(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-            timeout: 10000
-        });
+    async function scrapeChannel(channel) {
+        try {
+            const url = `https://t.me/s/${channel}`;
+            const { data } = await axios.get(url, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+                timeout: 10000
+            });
 
-        const $ = cheerio.load(data);
-        const messages = $('.tgme_widget_message_wrap');
-        
-        // Check the most recent 3 messages
-        const lastFew = messages.slice(-3);
+            const $ = cheerio.load(data);
+            const messages = $('.tgme_widget_message_wrap');
+            
+            // Focus on most recent message
+            const lastMsg = messages.last();
+            if (!lastMsg.length) return;
 
-        lastFew.each(async (i, el) => {
-            const msgEl = $(el);
-            const messageId = msgEl.find('.tgme_widget_message').attr('data-post');
-            const text = msgEl.find('.tgme_widget_message_text').text().trim();
+            const messageId = lastMsg.find('.tgme_widget_message').attr('data-post');
+            const text = lastMsg.find('.tgme_widget_message_text').text().trim();
 
             if (messageId && text && lastSeenIds[channel] !== messageId) {
-                console.log(`[SCRAPER] @${channel} Detection: ${text.substring(0, 30)}...`);
+                console.log(`[SCRAPER] New intel from @${channel}: ${text.substring(0, 40)}...`);
                 
                 try {
                     const res = await axios.post(BACKEND_URL, {
                         text: text,
                         source: `@${channel}`
                     });
-                    console.log(`[SCRAPER] Ingest success: ${res.data.success}`);
+                    if (res.data.success) {
+                        console.log(`[SCRAPER] Successfully ingested @${channel} message.`);
+                    }
                 } catch (e) {
-                    console.error(`[SCRAPER] Ingest error: ${e.response?.status} - ${e.message}`);
+                    console.error(`[SCRAPER] Ingest error for @${channel}: ${e.message}`);
                 }
                 
                 lastSeenIds[channel] = messageId;
             }
-        });
-    } catch (error) {
-        console.error(`[SCRAPER] @${channel} Connection error: ${error.message}`);
-    }
-}
-
-async function run() {
-    console.log("------------------------------------------");
-    console.log("   SkyWatch Scraper Node: OPERATIONAL    ");
-    console.log(`   Ingest Endpoint: ${BACKEND_URL}`);
-    console.log("------------------------------------------");
-
-    await updateSources();
-    
-    // Initial run
-    for (const channel of activeChannels) {
-        await scrapeChannel(channel);
-        await new Promise(r => setTimeout(r, 1000));
+        } catch (error) {
+            console.error(`[SCRAPER] Connection error for @${channel}: ${error.message}`);
+        }
     }
 
-    setInterval(async () => {
+    // Main loop
+    const run = async () => {
         await updateSources();
+        if (activeChannels.length === 0) {
+            console.warn("[SCRAPER] No active channels found in database.");
+        }
+        
         for (const channel of activeChannels) {
             await scrapeChannel(channel);
-            await new Promise(r => setTimeout(r, 2000));
+            // Small delay to prevent rate limiting
+            await new Promise(r => setTimeout(r, 1000));
         }
-    }, POLL_INTERVAL);
-}
+    };
 
-run();
+    // Initial run
+    run();
+    // Schedule periodic runs
+    setInterval(run, POLL_INTERVAL);
+}
