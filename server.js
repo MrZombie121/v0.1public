@@ -54,13 +54,16 @@ const DEFAULT_SOURCES = [
 const getDB = () => {
     try {
         if (!fs.existsSync(DB_PATH)) {
-            const initial = { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
+            const initial = { events: [], logs: [], users: [], sources: DEFAULT_SOURCES, maintenanceMode: false, maintenanceUntil: 0 };
             fs.writeFileSync(DB_PATH, JSON.stringify(initial, null, 2));
             return initial;
         }
-        return JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+        const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+        if (data.maintenanceMode === undefined) data.maintenanceMode = false;
+        if (data.maintenanceUntil === undefined) data.maintenanceUntil = 0;
+        return data;
     } catch (e) {
-        return { events: [], logs: [], users: [], sources: DEFAULT_SOURCES };
+        return { events: [], logs: [], users: [], sources: DEFAULT_SOURCES, maintenanceMode: false, maintenanceUntil: 0 };
     }
 };
 
@@ -77,6 +80,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get('/api/status', (req, res) => {
+    const db = getDB();
+    res.json({ 
+        maintenanceMode: db.maintenanceMode,
+        maintenanceUntil: db.maintenanceUntil,
+        systemInitialized: (db.users || []).length > 0 
+    });
+});
+
 app.get('/api/map-data', async (req, res) => {
     try {
         const response = await axios.get(GEOJSON_REMOTE_URL, { timeout: 10000 });
@@ -89,22 +101,43 @@ app.get('/api/map-data', async (req, res) => {
 
 app.get('/api/events', (req, res) => {
     const db = getDB();
+    const role = req.headers['x-user-role'];
+    
+    if (db.maintenanceMode && role !== 'owner') {
+        return res.status(503).json({ 
+            error: "MAINTENANCE_ACTIVE", 
+            maintenance: true,
+            until: db.maintenanceUntil 
+        });
+    }
+
     const now = Date.now();
     const valid = (db.events || []).filter(e => now - e.timestamp < 3600000);
     res.json({ 
         events: valid, 
         logs: (db.logs || []).slice(0, 50), 
-        systemInitialized: (db.users || []).length > 0 
+        systemInitialized: (db.users || []).length > 0,
+        maintenanceMode: db.maintenanceMode,
+        maintenanceUntil: db.maintenanceUntil
     });
 });
 
 app.get('/api/sources', (req, res) => res.json(getDB().sources || []));
 
+app.post('/api/admin/maintenance', (req, res) => {
+    const { enabled, until, userRole } = req.body;
+    if (userRole !== 'owner') return res.status(403).json({ success: false });
+    
+    const db = getDB();
+    db.maintenanceMode = !!enabled;
+    db.maintenanceUntil = until ? parseInt(until) : 0;
+    saveDB(db);
+    res.json({ success: true, maintenanceMode: db.maintenanceMode, maintenanceUntil: db.maintenanceUntil });
+});
+
 app.post('/api/ingest', async (req, res) => {
     const { text, source } = req.body;
     if (!text) return res.status(400).json({ success: false });
-
-    console.log(`[INGEST] Inbound from ${source}: ${text.substring(0, 50)}...`);
 
     if (text.toLowerCase().includes('тест')) {
         const db = getDB();
@@ -136,42 +169,22 @@ app.post('/api/ingest', async (req, res) => {
 });
 
 async function processTacticalText(text, source) {
-    if (!process.env.API_KEY) {
-        console.error("[AI] MISSING API_KEY");
-        return null;
-    }
+    if (!process.env.API_KEY) return null;
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     try {
         const response = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
-            contents: `Identify the air threat in this message from Ukraine: "${text}". 
-            Extract precise Lat/Lng based on the mentioned city or area. If unsure, use general region coordinates.
-            Output EXACTLY in this format:
-            TYPE:[shahed|missile|kab]
-            REGION:[id]
-            LAT:[decimal]
-            LNG:[decimal]
-            DIR:[degrees]
-            
-            Valid regions: odesa, kyiv, kharkiv, lviv, dnipro, zaporizhzhia, mykolaiv, kherson, chernihiv, sumy, poltava, vinnytsia, cherkasy, khmelnytskyi, zhytomyr, rivne, lutsk, ternopil, if, uzhhorod, chernivtsi, kirovohrad, donetsk, luhansk, crimea.`,
+            contents: `Identify air threat: "${text}". Format: TYPE:[shahed|missile|kab] REGION:[id] LAT:[decimal] LNG:[decimal] DIR:[degrees]`,
         });
         const raw = response.text || "";
-        const latMatch = raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i);
-        const lngMatch = raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i);
-        const regionMatch = raw.match(/REGION:\s*([a-z_]+)/i);
-        const typeMatch = raw.match(/TYPE:\s*(shahed|missile|kab)/i);
-        const dirMatch = raw.match(/DIR:\s*(\d+)/i);
-
-        const lat = latMatch ? parseFloat(latMatch[1]) : null;
-        const lng = lngMatch ? parseFloat(lngMatch[1]) : null;
-        const region = regionMatch ? regionMatch[1].toLowerCase() : 'kyiv';
-        const type = typeMatch ? typeMatch[1].toLowerCase() : 'shahed';
-        const dir = dirMatch ? parseInt(dirMatch[1]) : 180;
-
+        const lat = parseFloat(raw.match(/LAT:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
+        const lng = parseFloat(raw.match(/LNG:\s*([-]?\d+(\.\d+)?)/i)?.[1]);
+        const region = raw.match(/REGION:\s*([a-z_]+)/i)?.[1]?.toLowerCase() || 'kyiv';
+        const type = raw.match(/TYPE:\s*(shahed|missile|kab)/i)?.[1]?.toLowerCase() || 'shahed';
+        const dir = parseInt(raw.match(/DIR:\s*(\d+)/i)?.[1]) || 180;
         const db = getDB();
-        const finalLat = isNaN(lat) || lat === null ? (REGION_COORDS[region]?.lat || 50.45) : lat;
-        const finalLng = isNaN(lng) || lng === null ? (REGION_COORDS[region]?.lng || 30.52) : lng;
-
+        const finalLat = isNaN(lat) ? (REGION_COORDS[region]?.lat || 50.45) : lat;
+        const finalLng = isNaN(lng) ? (REGION_COORDS[region]?.lng || 30.52) : lng;
         const event = {
             id: 'ev_' + Date.now(),
             type, region, lat: finalLat, lng: finalLng, direction: dir, timestamp: Date.now(), source, rawText: text,
@@ -181,10 +194,7 @@ async function processTacticalText(text, source) {
         db.logs.unshift({ id: 'log_'+Date.now(), text: `DETECT: ${type.toUpperCase()} @ ${region.toUpperCase()}`, source, timestamp: Date.now() });
         saveDB(db);
         return { event };
-    } catch (e) { 
-        console.error("[AI ERROR]:", e.message);
-        return null; 
-    }
+    } catch (e) { return null; }
 }
 
 app.post('/api/auth/register', (req, res) => {
@@ -204,13 +214,6 @@ app.post('/api/auth/login', (req, res) => {
     res.json({ success: true, user: { email, role: user.role }, token: 'tk_'+Date.now() });
 });
 
-app.delete('/api/admin/event/:id', (req, res) => {
-    const db = getDB();
-    db.events = db.events.filter(e => e.id !== req.params.id);
-    saveDB(db);
-    res.json({ success: true });
-});
-
 app.use(express.static(__dirname));
 
 app.get('*', (req, res) => {
@@ -221,7 +224,5 @@ app.get('*', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`[SERVER] Listening on ${PORT}`);
-    // Start Scraper logic in the same process or separate but reliably
-    console.log("[SERVER] Activating Telegram Scraper...");
     startScraper(PORT);
 });

@@ -6,7 +6,7 @@ import Controls from './components/Controls';
 import TelegramFeed from './components/TelegramFeed';
 import AdminDashboard from './components/AdminDashboard';
 import AuthModal from './components/AuthModal';
-import { ShieldCheck, Activity, Loader2, AlertCircle, X, Settings, Lock, LogOut } from 'lucide-react';
+import { ShieldCheck, Activity, Loader2, AlertCircle, X, Settings, Lock, LogOut, Construction, Terminal, Timer } from 'lucide-react';
 
 interface User {
   email: string;
@@ -27,6 +27,8 @@ const App: React.FC = () => {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [systemInitialized, setSystemInitialized] = useState(false);
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+  const [maintenanceUntil, setMaintenanceUntil] = useState<number>(0);
   
   const [user, setUser] = useState<User | null>(() => {
     try {
@@ -50,12 +52,26 @@ const App: React.FC = () => {
 
   const refreshData = useCallback(async () => {
     try {
-      const res = await fetch(getApiUrl('/api/events'));
+      const headers: Record<string, string> = {};
+      if (user) headers['x-user-role'] = user.role;
+
+      const res = await fetch(getApiUrl('/api/events'), { headers });
+      
+      if (res.status === 503) {
+        const data = await res.json();
+        setMaintenanceMode(true);
+        setMaintenanceUntil(data.until || 0);
+        setIsInitialLoading(false);
+        return;
+      }
+
       if (res.ok) {
         const data = await res.json();
         setEvents(data.events || []);
         setLogs(data.logs || []);
         setSystemInitialized(data.systemInitialized);
+        setMaintenanceMode(data.maintenanceMode || false);
+        setMaintenanceUntil(data.maintenanceUntil || 0);
         setSystemError(null);
       } else {
         setSystemError("NODE LINK ERROR");
@@ -70,7 +86,13 @@ const App: React.FC = () => {
     } finally {
       setIsInitialLoading(false);
     }
-  }, []);
+  }, [user]);
+
+  useEffect(() => {
+    refreshData();
+    const interval = setInterval(refreshData, 5000); 
+    return () => clearInterval(interval);
+  }, [refreshData]);
 
   const filteredEvents = useMemo(() => {
     return events.filter(e => {
@@ -81,37 +103,36 @@ const App: React.FC = () => {
     });
   }, [events, filters]);
 
-  const forceTest = async () => {
-    try {
-      await fetch(getApiUrl('/api/ingest'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'тест', source: 'HUD_ADMIN' })
-      });
-      refreshData();
-    } catch (e) {}
-  };
-
-  const deleteEvent = async (id: string) => {
-    try {
-      await fetch(getApiUrl(`/api/admin/event/${id}`), { method: 'DELETE' });
-      refreshData();
-    } catch (e) {}
-  };
-
   const logout = () => {
     localStorage.removeItem('skywatch_user');
     setUser(null);
     setShowAdmin(false);
   };
 
-  useEffect(() => {
-    refreshData();
-    const interval = setInterval(refreshData, 3000); 
-    return () => clearInterval(interval);
-  }, [refreshData]);
+  const isOwner = user?.role === 'owner';
 
-  const canAccessAdmin = user?.role === 'admin' || user?.role === 'owner';
+  const MaintenanceTimer = ({ target }: { target: number }) => {
+    const [diff, setDiff] = useState(target - Date.now());
+    useEffect(() => {
+      const t = setInterval(() => setDiff(target - Date.now()), 1000);
+      return () => clearInterval(t);
+    }, [target]);
+
+    if (diff <= 0) return <span className="text-amber-500 animate-pulse">ЗАВЕРШЕННЯ...</span>;
+
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+
+    return (
+      <div className="flex flex-col items-center">
+        <span className="text-rose-500 font-black text-4xl tracking-widest font-mono">
+          {h.toString().padStart(2, '0')}:{m.toString().padStart(2, '0')}:{s.toString().padStart(2, '0')}
+        </span>
+        <span className="text-[9px] font-black text-slate-600 uppercase mt-2 tracking-[0.4em]">T-Minus Until Restore</span>
+      </div>
+    );
+  };
 
   if (isInitialLoading) {
     return (
@@ -122,8 +143,65 @@ const App: React.FC = () => {
     );
   }
 
+  if (maintenanceMode && !isOwner) {
+    return (
+      <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#020617] p-8 text-center relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-1 bg-rose-600 animate-pulse shadow-[0_0_15px_rgba(225,29,72,0.8)]" />
+        <div className="glass-panel p-12 rounded-[3rem] border border-white/5 space-y-10 max-w-xl relative shadow-2xl backdrop-blur-2xl">
+          <div className="flex justify-center">
+             <div className="p-6 bg-rose-500/10 rounded-full border border-rose-500/20 text-rose-500 animate-pulse shadow-[0_0_40px_rgba(244,63,94,0.1)]">
+                <Construction size={64} />
+             </div>
+          </div>
+          <div className="space-y-4">
+            <h1 className="text-5xl font-black uppercase tracking-tighter text-white">Технічні роботи</h1>
+            <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.4em]">Grid Offline for Maintenance</p>
+          </div>
+
+          <div className="bg-black/40 border border-white/5 p-8 rounded-3xl">
+             <MaintenanceTimer target={maintenanceUntil} />
+          </div>
+
+          <p className="text-sm text-slate-500 leading-relaxed font-medium">
+             Система тимчасово заблокована для оновлення ядра та оптимізації алгоритмів Gemini 3.0. 
+             Всі джерела Telegram продовжують збирати дані в автономному режимі.
+          </p>
+
+          <div className="flex items-center justify-center gap-3 pt-4">
+             <Terminal size={14} className="text-slate-700" />
+             <span className="text-[9px] font-black text-slate-700 uppercase tracking-widest">SkyWatch Kernel v1.2.6-stable</span>
+          </div>
+          
+          <div className="absolute bottom-4 right-4 opacity-10 hover:opacity-100 transition-opacity">
+             <button onClick={() => setShowAuth(true)} className="p-3 text-slate-600 hover:text-white transition-colors">
+                <Lock size={16} />
+             </button>
+          </div>
+        </div>
+
+        {showAuth && (
+          <AuthModal isFirstTime={!systemInitialized} onSuccess={(u) => {
+              setUser(u);
+              localStorage.setItem('skywatch_user', JSON.stringify(u));
+              setShowAuth(false);
+              refreshData();
+            }} onClose={() => setShowAuth(false)} 
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="relative w-screen h-screen flex flex-col font-mono overflow-hidden bg-[#020617] text-slate-200">
+      {maintenanceMode && isOwner && (
+        <div className="absolute top-0 left-0 right-0 z-[3000] bg-amber-600/20 backdrop-blur-sm border-b border-amber-600/30 py-1 text-center">
+           <span className="text-[10px] font-black text-amber-500 uppercase tracking-widest animate-pulse flex items-center justify-center gap-4">
+              <Timer size={12} /> !! MAINTENANCE MODE ACTIVE (OWNER BYPASS) !! <Timer size={12} />
+           </span>
+        </div>
+      )}
+
       {systemError && (
         <div className="absolute top-24 left-1/2 -translate-x-1/2 z-[2000] glass-panel border-rose-500/50 px-6 py-2 rounded-xl flex items-center gap-3">
           <AlertCircle size={16} className="text-rose-500" />
@@ -146,8 +224,15 @@ const App: React.FC = () => {
               </div>
             ))}
           </div>
-          {canAccessAdmin && (
-            <button onClick={forceTest} className="w-full py-2 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 rounded-xl text-[9px] font-black text-sky-400 uppercase transition-all">
+          {isOwner && (
+            <button onClick={async () => {
+              await fetch(getApiUrl('/api/ingest'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: 'тест', source: 'HUD_ADMIN' })
+              });
+              refreshData();
+            }} className="w-full py-2 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 rounded-xl text-[9px] font-black text-sky-400 uppercase transition-all">
                FORCE TEST SIGNAL
             </button>
           )}
@@ -194,7 +279,7 @@ const App: React.FC = () => {
               <span className="text-xs text-white font-black">{user.email}</span>
               <button onClick={logout} className="p-2 text-rose-500 hover:scale-110 transition-transform"><LogOut size={16} /></button>
             </div>
-            {canAccessAdmin && (
+            {(user.role === 'admin' || user.role === 'owner') && (
               <button onClick={() => setShowAdmin(true)} className="bg-sky-600 p-3.5 rounded-full text-white shadow-xl hover:bg-sky-500">
                 <Settings size={22} />
               </button>
@@ -208,7 +293,7 @@ const App: React.FC = () => {
       </div>
 
       {showAuth && (
-        <AuthModal isFirstTime={!systemInitialized} onSuccess={(u, token) => {
+        <AuthModal isFirstTime={!systemInitialized} onSuccess={(u) => {
             setUser(u);
             localStorage.setItem('skywatch_user', JSON.stringify(u));
             setShowAuth(false);
@@ -217,8 +302,18 @@ const App: React.FC = () => {
         />
       )}
 
-      {showAdmin && canAccessAdmin && (
-        <AdminDashboard currentUserRole={user?.role || 'user'} events={events} onDelete={deleteEvent} onClose={() => setShowAdmin(false)} />
+      {showAdmin && (user?.role === 'admin' || user?.role === 'owner') && (
+        <AdminDashboard 
+          currentUserRole={user?.role || 'user'} 
+          events={events} 
+          maintenanceMode={maintenanceMode}
+          onDelete={async (id) => {
+            await fetch(getApiUrl(`/api/admin/event/${id}`), { method: 'DELETE' });
+            refreshData();
+          }} 
+          onClose={() => setShowAdmin(false)} 
+          onMaintenanceToggle={refreshData}
+        />
       )}
 
       {selectedEvent && (

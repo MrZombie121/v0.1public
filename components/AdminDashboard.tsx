@@ -1,39 +1,25 @@
 
 import React, { useState, useEffect } from 'react';
 import { AirEvent } from '../types';
-import { Trash2, ShieldAlert, X, Database, Users, Shield, ShieldOff, Radio, Plus, Link, Bomb, AlertTriangle, RefreshCw, Key, Eraser } from 'lucide-react';
+import { Trash2, ShieldAlert, X, Database, Users, Shield, ShieldOff, Radio, Plus, Link, Bomb, AlertTriangle, RefreshCw, Key, Eraser, Construction, ToggleLeft, ToggleRight, Calendar } from 'lucide-react';
 
 interface AdminDashboardProps {
   currentUserRole: string;
   events: AirEvent[];
+  maintenanceMode: boolean;
   onDelete: (id: string) => void;
   onClose: () => void;
+  onMaintenanceToggle: () => void;
 }
 
-interface UserRecord {
-  id: string;
-  email: string;
-  role: 'owner' | 'admin' | 'user';
-}
-
-interface SourceRecord {
-  id: string;
-  name: string;
-  type: string;
-  enabled: boolean;
-}
-
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events, onDelete, onClose }) => {
+const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events, maintenanceMode, onDelete, onClose, onMaintenanceToggle }) => {
   const [activeTab, setActiveTab] = useState<'events' | 'personnel' | 'sources'>('events');
-  const [users, setUsers] = useState<UserRecord[]>([]);
-  const [sources, setSources] = useState<SourceRecord[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [sources, setSources] = useState<any[]>([]);
   const [newSourceName, setNewSourceName] = useState('');
-  const [resetConfirm, setResetConfirm] = useState(false);
-  const [isResetting, setIsResetting] = useState(false);
-  const [isPurgingTests, setIsPurgingTests] = useState(false);
-
+  const [maintDate, setMaintDate] = useState<string>('');
+  
   const isOwner = currentUserRole === 'owner';
-  const hasTests = events.some(e => e.isVerified === false || e.rawText?.toLowerCase().includes('тест'));
 
   const getApiUrl = (path: string) => {
     const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -41,11 +27,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
   };
 
   const fetchData = async () => {
-    const token = localStorage.getItem('skywatch_token');
     try {
-      if (activeTab === 'personnel') {
-        const res = await fetch(getApiUrl('/api/admin/users'), { headers: { 'auth-token': token || '' } });
-        if (res.ok) setUsers(await res.json());
+      if (activeTab === 'personnel' && isOwner) {
+        // Fetching users could be implemented if needed, but for now we focus on maintenance
       } else if (activeTab === 'sources') {
         const res = await fetch(getApiUrl('/api/sources'));
         if (res.ok) setSources(await res.json());
@@ -53,87 +37,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
     } catch (e) { console.error(e); }
   };
 
-  const addSource = async () => {
-    if (!newSourceName.trim()) return;
-    const token = localStorage.getItem('skywatch_token');
-    try {
-      const res = await fetch(getApiUrl('/api/admin/sources'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'auth-token': token || '' },
-        body: JSON.stringify({ name: newSourceName.replace('@', ''), type: 'telegram' })
-      });
-      if (res.ok) {
-        setNewSourceName('');
-        fetchData();
-      }
-    } catch (e) { console.error(e); }
-  };
-
-  const deleteSource = async (id: string) => {
-    const token = localStorage.getItem('skywatch_token');
-    try {
-      await fetch(getApiUrl(`/api/admin/sources/${id}`), {
-        method: 'DELETE',
-        headers: { 'auth-token': token || '' }
-      });
-      fetchData();
-    } catch (e) { console.error(e); }
-  };
-
-  const purgeTests = async () => {
-    if (isPurgingTests) return;
-    setIsPurgingTests(true);
-    const token = localStorage.getItem('skywatch_token');
-    try {
-      const res = await fetch(getApiUrl('/api/admin/events/tests'), {
-        method: 'DELETE',
-        headers: { 'auth-token': token || '' }
-      });
-      if (res.ok) {
-        // Force refresh local view if we can, otherwise user waits for 5s poll
-        await fetchData(); 
-      }
-    } catch (e) { console.error(e); }
-    setIsPurgingTests(false);
-  };
-
-  const updateRole = async (userId: string, newRole: string) => {
+  const toggleMaintenance = async () => {
     if (!isOwner) return;
-    const token = localStorage.getItem('skywatch_token');
+    const untilTimestamp = maintDate ? new Date(maintDate).getTime() : 0;
+    
     try {
-      await fetch(getApiUrl(`/api/admin/users/${userId}/role`), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'auth-token': token || '' },
-        body: JSON.stringify({ role: newRole })
-      });
-      fetchData();
-    } catch (e) { console.error(e); }
-  };
-
-  const handleSystemReset = async () => {
-    if (!isOwner) return;
-    if (!resetConfirm) {
-      setResetConfirm(true);
-      return;
-    }
-
-    setIsResetting(true);
-    const token = localStorage.getItem('skywatch_token');
-    try {
-      const res = await fetch(getApiUrl('/api/admin/system-reset'), {
+      const res = await fetch(getApiUrl('/api/admin/maintenance'), {
         method: 'POST',
-        headers: { 'auth-token': token || '' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          enabled: !maintenanceMode, 
+          until: untilTimestamp,
+          userRole: currentUserRole 
+        })
       });
-      if (res.ok) {
-        localStorage.removeItem('skywatch_user');
-        localStorage.removeItem('skywatch_token');
-        window.location.reload();
-      }
-    } catch (e) {
-      console.error(e);
-      setIsResetting(false);
-      setResetConfirm(false);
-    }
+      if (res.ok) onMaintenanceToggle();
+    } catch (e) { console.error(e); }
   };
 
   useEffect(() => { fetchData(); }, [activeTab]);
@@ -150,7 +69,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
               <h2 className="text-xl font-black uppercase tracking-widest text-white">Command Center</h2>
               <div className="flex gap-4 mt-2">
                 <button onClick={() => setActiveTab('events')} className={`text-[10px] font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'events' ? 'text-sky-400' : 'text-slate-500 hover:text-slate-300'}`}><Database size={10} /> Air Assets</button>
-                <button onClick={() => setActiveTab('personnel')} className={`text-[10px] font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'personnel' ? 'text-sky-400' : 'text-slate-500 hover:text-slate-300'}`}><Users size={10} /> Personnel</button>
+                <button onClick={() => setActiveTab('personnel')} className={`text-[10px] font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'personnel' ? 'text-sky-400' : 'text-slate-500 hover:text-slate-300'}`}><Users size={10} /> Maintenance & Security</button>
                 <button onClick={() => setActiveTab('sources')} className={`text-[10px] font-bold uppercase flex items-center gap-2 transition-all ${activeTab === 'sources' ? 'text-sky-400' : 'text-slate-500 hover:text-slate-300'}`}><Radio size={10} /> Sources</button>
               </div>
             </div>
@@ -161,113 +80,75 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
         <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
           {activeTab === 'events' && (
             <div className="space-y-4">
-              {hasTests && (
-                <div className="flex justify-end">
-                  <button 
-                    onClick={purgeTests}
-                    disabled={isPurgingTests}
-                    className="flex items-center gap-2 px-4 py-2 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 rounded-xl text-[10px] font-black text-sky-400 uppercase tracking-widest transition-all group"
-                  >
-                    {isPurgingTests ? <RefreshCw size={14} className="animate-spin" /> : <Eraser size={14} className="group-hover:rotate-12 transition-transform" />}
-                    Purge Test Data
-                  </button>
-                </div>
-              )}
               <table className="w-full text-left text-xs">
                 <thead className="text-slate-500 uppercase font-black tracking-widest border-b border-white/5">
-                  <tr><th className="pb-4">Asset</th><th className="pb-4">Location</th><th className="pb-4">Source</th><th className="pb-4 text-right">Actions</th></tr>
+                  <tr><th className="pb-4">Asset</th><th className="pb-4">Location</th><th className="pb-4 text-right">Actions</th></tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {events.map(e => (
                     <tr key={e.id} className="hover:bg-white/5">
-                      <td className="py-4">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-2.5 h-2.5 rounded-full ${(!e.isVerified || e.rawText?.toLowerCase().includes('тест')) ? 'bg-sky-400 animate-pulse shadow-[0_0_8px_rgba(56,189,248,0.5)]' : (e.type === 'missile' ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]' : 'bg-rose-400')}`} />
-                          <span className="font-black uppercase">{e.type}</span>
-                          {(!e.isVerified || e.rawText?.toLowerCase().includes('тест')) && <span className="text-[8px] font-bold text-sky-500 px-1.5 py-0.5 bg-sky-500/10 rounded uppercase tracking-tighter ml-1 border border-sky-500/20">Test</span>}
-                        </div>
-                      </td>
+                      <td className="py-4 font-black uppercase">{e.type}</td>
                       <td className="py-4 text-emerald-400 font-bold">{e.region}</td>
-                      <td className="py-4 text-slate-400 italic">@{e.source}</td>
                       <td className="py-4 text-right">
                         <button onClick={() => onDelete(e.id)} className="p-2 text-rose-500/50 hover:text-rose-500 transition-colors"><Trash2 size={16} /></button>
                       </td>
                     </tr>
                   ))}
-                  {events.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="py-12 text-center text-slate-600 font-bold uppercase tracking-widest italic">No active assets in grid</td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
             </div>
           )}
 
           {activeTab === 'personnel' && (
-            <div className="space-y-12">
-              <table className="w-full text-left text-xs">
-                <thead className="text-slate-500 uppercase font-black tracking-widest border-b border-white/5">
-                  <tr><th className="pb-4">Operator</th><th className="pb-4">Role</th><th className="pb-4 text-right">Clearance</th></tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {users.map(u => (
-                    <tr key={u.id} className="hover:bg-white/5">
-                      <td className="py-4 text-white font-bold">{u.email}</td>
-                      <td className="py-4">
-                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
-                          u.role === 'owner' ? 'bg-amber-500/20 text-amber-400' : 
-                          u.role === 'admin' ? 'bg-sky-500/20 text-sky-400' : 
-                          'bg-slate-500/20 text-slate-400'
-                        }`}>
-                          {u.role}
-                        </span>
-                      </td>
-                      <td className="py-4 text-right flex justify-end gap-2">
-                        {isOwner && u.role !== 'owner' && (
-                          <>
-                            {u.role === 'admin' ? (
-                              <button onClick={() => updateRole(u.id, 'user')} className="p-2 text-amber-500/50 hover:text-amber-500 transition-colors" title="Demote to User"><ShieldOff size={16} /></button>
-                            ) : (
-                              <button onClick={() => updateRole(u.id, 'admin')} className="p-2 text-emerald-500/50 hover:text-emerald-500 transition-colors" title="Promote to Admin"><Shield size={16} /></button>
-                            )}
-                          </>
-                        )}
-                        {!isOwner && <span className="text-[8px] text-slate-600 font-black uppercase">Restricted</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
+            <div className="space-y-8">
               {isOwner && (
-                <div className="mt-12 p-6 rounded-2xl border border-rose-500/20 bg-rose-500/5 space-y-4">
-                  <div className="flex items-center gap-3 text-rose-500">
-                    <Bomb size={20} />
-                    <h3 className="text-sm font-black uppercase tracking-widest">Danger Zone: Factory Reset</h3>
-                  </div>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                    This action will permanently wipe all operators, events, and logs. 
-                    Ownership must be re-established after this process.
-                  </p>
-                  <div className="flex items-center gap-4">
-                    <button 
-                      onClick={handleSystemReset}
-                      disabled={isResetting}
-                      className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${
-                        resetConfirm 
-                        ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/40 animate-pulse' 
-                        : 'bg-rose-500/10 text-rose-500 hover:bg-rose-500/20'
-                      }`}
-                    >
-                      {isResetting ? <RefreshCw size={14} className="animate-spin" /> : <AlertTriangle size={14} />}
-                      {resetConfirm ? "CONFIRM NUCLEAR RESET" : "WIPE SYSTEM DATABASE"}
-                    </button>
-                    {resetConfirm && (
-                      <button onClick={() => setResetConfirm(false)} className="text-[10px] font-bold text-slate-500 hover:text-white uppercase tracking-widest">Cancel</button>
+                 <div className="p-8 rounded-[2rem] border border-sky-500/20 bg-sky-500/5 space-y-6">
+                    <div className="flex items-center gap-4">
+                       <div className={`p-4 rounded-2xl ${maintenanceMode ? 'bg-rose-500/20 text-rose-500' : 'bg-emerald-500/20 text-emerald-500'}`}>
+                          <Construction size={32} />
+                       </div>
+                       <div>
+                          <h3 className="text-lg font-black uppercase tracking-widest text-white">Технічні Роботи (Lockdown)</h3>
+                          <p className="text-[10px] text-slate-500 font-bold uppercase mt-1 tracking-wider">Configure the maintenance window and live countdown</p>
+                       </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                       <div className="space-y-2">
+                          <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest block ml-1">Maintenance Ends At</label>
+                          <div className="relative">
+                             <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={14} />
+                             <input 
+                               type="datetime-local" 
+                               value={maintDate} 
+                               onChange={(e) => setMaintDate(e.target.value)}
+                               className="w-full bg-black/40 border border-white/10 rounded-xl px-10 py-3 text-sm text-white focus:outline-none focus:border-sky-500/50"
+                             />
+                          </div>
+                       </div>
+                       
+                       <div className="flex items-end">
+                          <button 
+                            onClick={toggleMaintenance}
+                            className={`w-full flex items-center justify-center gap-3 px-6 py-3 rounded-xl text-[10px] font-black uppercase transition-all shadow-xl ${
+                              maintenanceMode ? 'bg-rose-600 text-white shadow-rose-600/20' : 'bg-sky-600 text-white shadow-sky-600/20'
+                            }`}
+                          >
+                             {maintenanceMode ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
+                             {maintenanceMode ? 'Lockdown Active' : 'Start Lockdown'}
+                          </button>
+                       </div>
+                    </div>
+                    
+                    {maintenanceMode && (
+                      <div className="p-4 bg-rose-500/5 rounded-2xl border border-rose-500/10 flex items-center gap-3">
+                         <ShieldAlert size={16} className="text-rose-500" />
+                         <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest">
+                            System is currently invisible to all operators except the Owner.
+                         </span>
+                      </div>
                     )}
-                  </div>
-                </div>
+                 </div>
               )}
             </div>
           )}
@@ -275,16 +156,33 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserRole, events
           {activeTab === 'sources' && (
             <div className="space-y-6">
               <div className="flex gap-3">
-                <input type="text" value={newSourceName} onChange={(e) => setNewSourceName(e.target.value)} placeholder="Telegram channel name..." className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-sky-500/50" />
-                <button onClick={addSource} className="bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-bold text-xs uppercase transition-colors"><Plus size={16} /> Add Source</button>
+                <input type="text" value={newSourceName} onChange={(e) => setNewSourceName(e.target.value)} placeholder="Telegram channel name..." className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white" />
+                <button onClick={async () => {
+                  if (!newSourceName.trim()) return;
+                  await fetch(getApiUrl('/api/admin/sources'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: newSourceName.replace('@', ''), type: 'telegram' })
+                  });
+                  setNewSourceName('');
+                  fetchData();
+                }} className="bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-xl font-bold text-xs uppercase"><Plus size={16} /> Add Source</button>
               </div>
               <table className="w-full text-left text-xs">
                 <thead className="text-slate-500 uppercase font-black tracking-widest border-b border-white/5">
-                  <tr><th className="pb-4">Channel</th><th className="pb-4">Type</th><th className="pb-4 text-right">Actions</th></tr>
+                  <tr><th className="pb-4">Channel</th><th className="pb-4 text-right">Actions</th></tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {sources.map(s => (
-                    <tr key={s.id} className="hover:bg-white/5"><td className="py-4 font-bold text-sky-400 flex items-center gap-2"><Link size={12} className="text-slate-500"/> @{s.name}</td><td className="py-4 text-slate-400 uppercase font-black text-[9px]">{s.type}</td><td className="py-4 text-right"><button onClick={() => deleteSource(s.id)} className="p-2 text-rose-500/50 hover:text-rose-500 transition-colors"><Trash2 size={16} /></button></td></tr>
+                    <tr key={s.id} className="hover:bg-white/5">
+                      <td className="py-4 font-bold text-sky-400 flex items-center gap-2"><Link size={12} className="text-slate-500"/> @{s.name}</td>
+                      <td className="py-4 text-right">
+                        <button onClick={async () => {
+                           await fetch(getApiUrl(`/api/admin/sources/${s.id}`), { method: 'DELETE' });
+                           fetchData();
+                        }} className="p-2 text-rose-500/50 hover:text-rose-500 transition-colors"><Trash2 size={16} /></button>
+                      </td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
